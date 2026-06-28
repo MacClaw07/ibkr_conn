@@ -19,8 +19,11 @@ Usage:
 
 import argparse
 import csv
+import json
 import os
 import sys
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
@@ -190,6 +193,91 @@ def _bars_to_csv(bars: List[BarData], path: str) -> int:
     return len(bars)
 
 
+def _bars_to_questdb(
+    bars: List[BarData],
+    contract: Contract,
+    expiry_date: str,
+    ric_label: str,
+    questdb_url: str = "http://127.0.0.1:9000",
+) -> int:
+    """Write bars to QuestDB via ILP (InfluxDB Line Protocol).
+
+    Args:
+        bars: List of BarData from ib_insync.
+        contract: The resolved IB contract (for getting RIC symbol).
+        expiry_date: Expiry date as YYYY-MM-DD.
+        ric_label: RIC label e.g. 'ESU6'.
+        questdb_url: QuestDB REST base URL.
+
+    Returns:
+        Number of rows written.
+    """
+    if not bars:
+        return 0
+
+    # ILP measurement name is the table name
+    measurement = "futures_hist"
+
+    lines = []
+    for b in bars:
+        # datetime → nanoseconds since epoch
+        ts_ns = int(b.date.timestamp() * 1_000_000_000)
+
+        # Tags: ric, expiry (must be comma-escaped, but our values are safe)
+        # Format: measurement,tag=value,tag=value field=value,field=value timestamp
+        
+        # Build fields string
+        fields = []
+        if b.open is not None and b.open == b.open:  # also check not NaN
+            fields.append(f"open={b.open}")
+        if b.high is not None and b.high == b.high:
+            fields.append(f"high={b.high}")
+        if b.low is not None and b.low == b.low:
+            fields.append(f"low={b.low}")
+        if b.close is not None and b.close == b.close:
+            fields.append(f"close={b.close}")
+        if b.volume is not None:
+            fields.append(f"volume={int(b.volume)}i")
+        if b.barCount is not None:
+            fields.append(f"bar_count={int(b.barCount)}i")
+        if b.average is not None and b.average == b.average:
+            fields.append(f"average={b.average}")
+
+        if not fields:
+            continue
+
+        line = f"{measurement},ric={ric_label},expiry={expiry_date} {','.join(fields)} {ts_ns}"
+        lines.append(line)
+
+    # Batch-send: 1000 rows per POST
+    batch_size = 1000
+    total_written = 0
+    write_url = f"{questdb_url}/write"
+
+    for i in range(0, len(lines), batch_size):
+        batch = lines[i:i + batch_size]
+        body = "\n".join(batch).encode("utf-8")
+
+        req = urllib.request.Request(
+            write_url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "text/plain; charset=utf-8"},
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                if resp.status == 204:
+                    total_written += len(batch)
+                else:
+                    print(f"  WARNING: QuestDB /write returned HTTP {resp.status}",
+                          file=sys.stderr)
+        except urllib.error.URLError as e:
+            print(f"  ERROR writing batch to QuestDB: {e}", file=sys.stderr)
+
+    return total_written
+
+
 # ── argparse builder ─────────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -242,24 +330,26 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Output
     parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV path (default: auto-generated)")
+    parser.add_argument("--format", choices=["questdb", "csv"], default="questdb",
+                        help="Output format: questdb (default) or csv")
 
     return parser
 
 
 # ── contract resolution ─────────────────────────────────────────────────────
 
-def _get_contract(ib: IB, args: argparse.Namespace) -> Tuple[Contract, str]:
+def _get_contract(ib: IB, args: argparse.Namespace) -> Tuple[Contract, str, str]:
     """
     Build a contract from CLI args and resolve it via reqContractDetails.
     Requires an already-connected IB instance.
 
     Returns:
-        (resolved_contract, label) — label is a human-readable string for
-        the instrument, used for the output filename.
+        (resolved_contract, label, expiry_date) — label is a human-readable
+        string for the instrument, expiry_date is YYYY-MM-DD.
     """
     if args.es:
         contract = _build_es_contract(args.es)
-        label = f"ES{args.es}"
+        initial_label = f"ES{args.es}"
     else:
         contract = _build_ric_contract(
             args.ric,
@@ -268,7 +358,7 @@ def _get_contract(ib: IB, args: argparse.Namespace) -> Tuple[Contract, str]:
             currency=args.currency,
             multiplier=args.multiplier,
         )
-        label = args.ric.strip().upper()
+        initial_label = args.ric.strip().upper()
 
     print(f"Resolving contract: {contract} ...")
     details = ib.reqContractDetails(contract)
@@ -276,11 +366,32 @@ def _get_contract(ib: IB, args: argparse.Namespace) -> Tuple[Contract, str]:
         print(f"ERROR: Could not resolve contract {contract}", file=sys.stderr)
         sys.exit(1)
 
-    resolved = details[0].contract
+    cd = details[0]
+    resolved = cd.contract
+
+    # Use the resolved localSymbol as the authoritative RIC label
+    ric_label = resolved.localSymbol if resolved.localSymbol else initial_label
+
+    # Extract expiry date from contract details
+    expiry_date = ""
+    if hasattr(resolved, 'lastTradeDateOrContractMonth') and resolved.lastTradeDateOrContractMonth:
+        ltd = resolved.lastTradeDateOrContractMonth
+        # Could be like '20260918' (full date) or '202609' (YYYYMM)
+        if len(ltd) == 8:
+            expiry_date = f"{ltd[0:4]}-{ltd[4:6]}-{ltd[6:8]}"
+        elif len(ltd) == 6:
+            # YYYYMM — use the 3rd Friday heuristic for quarterly futures
+            # or just use last day of month as fallback
+            expiry_date = f"{ltd[0:4]}-{ltd[4:6]}-01"  # placeholder
+    if not expiry_date and hasattr(cd, 'realExpirationDate') and cd.realExpirationDate:
+        expiry_date = cd.realExpirationDate  # Usually 'YYYYMMDD'
+        if len(expiry_date) == 8:
+            expiry_date = f"{expiry_date[0:4]}-{expiry_date[4:6]}-{expiry_date[6:8]}"
+
     print(f"Resolved: {resolved.localSymbol} ({resolved.symbol}) "
           f"Exchange={resolved.exchange} Currency={resolved.currency} "
-          f"Multiplier={resolved.multiplier}")
-    return resolved, label
+          f"Multiplier={resolved.multiplier} Expiry={expiry_date}")
+    return resolved, ric_label, expiry_date
 
 
 # ── download loop ────────────────────────────────────────────────────────────
@@ -304,6 +415,8 @@ def _download_bars(
     total_chunks = len(chunks)
 
     for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
+        # Use end-of-day (23:59:59) so the duration covers the full last day
+        chunk_end_fixed = chunk_end.replace(hour=23, minute=59, second=59)
         delta_days = (chunk_end - chunk_start).days + 1
         dur_str = f"{delta_days} D"
         print(f"[{i}/{total_chunks}] Fetching {chunk_start.date()} → {chunk_end.date()} "
@@ -311,7 +424,7 @@ def _download_bars(
 
         try:
             bars = _fetch_chunk(
-                ib, contract, chunk_end, dur_str,
+                ib, contract, chunk_end_fixed, dur_str,
                 bar_size, what_to_show, use_rth,
             )
         except Exception as e:
@@ -361,7 +474,7 @@ def main():
 
     try:
         # Build and resolve contract
-        resolved, label = _get_contract(ib, args)
+        resolved, label, expiry_date = _get_contract(ib, args)
 
         # Download bars
         all_bars = _download_bars(
@@ -370,15 +483,21 @@ def main():
             args.bar_size, args.what_to_show, use_rth,
         )
 
-        # Save to CSV
-        if args.output:
-            out_path = args.output
+        # Write output
+        if args.format == "questdb":
+            written = _bars_to_questdb(all_bars, resolved, expiry_date, label)
+            print(f"\nDone. {written} rows written to QuestDB (futures_hist)")
         else:
-            date_tag = f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
-            out_path = os.path.join(OUTPUT_DIR, f"{label}_{date_tag}_{args.bar_size.replace(' ', '')}.csv")
+            # CSV format
+            if args.output:
+                out_path = args.output
+            else:
+                date_tag = f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
+                out_path = os.path.join(OUTPUT_DIR, f"{label}_{date_tag}_{args.bar_size.replace(' ', '')}.csv")
 
-        written = _bars_to_csv(all_bars, out_path)
-        print(f"\nDone. {written} bars saved to {out_path}")
+            written = _bars_to_csv(all_bars, out_path)
+            print(f"\nDone. {written} bars saved to {out_path}")
+
         if not all_bars:
             print("WARNING: No data returned. Possible reasons:")
             print("  - No other TWS/Gateway session can be active (error 162)")
