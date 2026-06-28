@@ -156,9 +156,9 @@ def _fetch_chunk(
 ) -> List[BarData]:
     """Fetch one chunk of historical bars."""
     # IB format: yyyymmdd HH:MM:SS TZ (with spaces between all parts)
-    # IB doesn't like US/Eastern on some versions — try EST/EDT.
-    # Empty string = now (works reliably across all versions).
-    end_str = end_dt.strftime("%Y%m%d %H:%M:%S") + " US/Eastern"
+    # OR: yyyymmdd-HH:MM:SS for UTC (with dash between date and time).
+    # Using UTC format is more reliable across IB versions.
+    end_str = end_dt.strftime("%Y%m%d-%H:%M:%S")
     return ib.reqHistoricalData(
         contract,
         endDateTime=end_str,
@@ -190,9 +190,10 @@ def _bars_to_csv(bars: List[BarData], path: str) -> int:
     return len(bars)
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
+# ── argparse builder ─────────────────────────────────────────────────────────
 
-def main():
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the ArgumentParser with all options."""
     parser = argparse.ArgumentParser(
         description="Download IBKR historical 1-minute bar data",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -242,16 +243,20 @@ def main():
     # Output
     parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV path (default: auto-generated)")
 
-    args = parser.parse_args()
+    return parser
 
-    # ── Parse date range ─────────────────────────────────────────────────
-    start_date, end_date = _parse_date_range(args.date)
-    if args.all_hours:
-        use_rth = False
-    else:
-        use_rth = args.use_rth
 
-    # ── Build contract ───────────────────────────────────────────────────
+# ── contract resolution ─────────────────────────────────────────────────────
+
+def _get_contract(ib: IB, args: argparse.Namespace) -> Tuple[Contract, str]:
+    """
+    Build a contract from CLI args and resolve it via reqContractDetails.
+    Requires an already-connected IB instance.
+
+    Returns:
+        (resolved_contract, label) — label is a human-readable string for
+        the instrument, used for the output filename.
+    """
     if args.es:
         contract = _build_es_contract(args.es)
         label = f"ES{args.es}"
@@ -265,7 +270,85 @@ def main():
         )
         label = args.ric.strip().upper()
 
-    # ── Connect ──────────────────────────────────────────────────────────
+    print(f"Resolving contract: {contract} ...")
+    details = ib.reqContractDetails(contract)
+    if not details:
+        print(f"ERROR: Could not resolve contract {contract}", file=sys.stderr)
+        sys.exit(1)
+
+    resolved = details[0].contract
+    print(f"Resolved: {resolved.localSymbol} ({resolved.symbol}) "
+          f"Exchange={resolved.exchange} Currency={resolved.currency} "
+          f"Multiplier={resolved.multiplier}")
+    return resolved, label
+
+
+# ── download loop ────────────────────────────────────────────────────────────
+
+def _download_bars(
+    ib: IB,
+    contract: Contract,
+    start_date: datetime,
+    end_date: datetime,
+    bar_size: str,
+    what_to_show: str,
+    use_rth: bool,
+) -> List[BarData]:
+    """
+    Download historical bars in chunks, deduplicate, and return sorted list.
+
+    Handles the full chunking → fetching → dedup pipeline for a date range.
+    """
+    chunks = _generate_chunks(start_date, end_date, chunk_days=5)
+    all_bars: List[BarData] = []
+    total_chunks = len(chunks)
+
+    for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
+        delta_days = (chunk_end - chunk_start).days + 1
+        dur_str = f"{delta_days} D"
+        print(f"[{i}/{total_chunks}] Fetching {chunk_start.date()} → {chunk_end.date()} "
+              f"({dur_str}) ...", end=" ", flush=True)
+
+        try:
+            bars = _fetch_chunk(
+                ib, contract, chunk_end, dur_str,
+                bar_size, what_to_show, use_rth,
+            )
+        except Exception as e:
+            print(f"\nERROR on chunk {i}: {e}", file=sys.stderr)
+            print("Saving data fetched so far...", file=sys.stderr)
+            break
+
+        print(f"{len(bars)} bars")
+        if bars:
+            all_bars.extend(bars)
+
+    # Deduplicate bars (chunk boundaries may overlap)
+    if all_bars:
+        seen = set()
+        deduped: List[BarData] = []
+        for b in all_bars:
+            key = b.date
+            if key not in seen:
+                seen.add(key)
+                deduped.append(b)
+        deduped.sort(key=lambda b: b.date)
+        all_bars = deduped
+
+    return all_bars
+
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    # Parse date range
+    start_date, end_date = _parse_date_range(args.date)
+    use_rth = False if args.all_hours else args.use_rth
+
+    # Connect to IB Gateway
     ib = IB()
     try:
         print(f"Connecting to IB Gateway at {args.host}:{args.port} ...")
@@ -277,56 +360,17 @@ def main():
         sys.exit(1)
 
     try:
-        # Resolve contract to get full details
-        print(f"Resolving contract: {contract} ...")
-        details = ib.reqContractDetails(contract)
-        if not details:
-            print(f"ERROR: Could not resolve contract {contract}", file=sys.stderr)
-            sys.exit(1)
+        # Build and resolve contract
+        resolved, label = _get_contract(ib, args)
 
-        resolved = details[0].contract
-        print(f"Resolved: {resolved.localSymbol} ({resolved.symbol}) "
-              f"Exchange={resolved.exchange} Currency={resolved.currency} "
-              f"Multiplier={resolved.multiplier}")
+        # Download bars
+        all_bars = _download_bars(
+            ib, resolved,
+            start_date, end_date,
+            args.bar_size, args.what_to_show, use_rth,
+        )
 
-        # ── Fetch data in chunks ─────────────────────────────────────────
-        chunks = _generate_chunks(start_date, end_date, chunk_days=5)
-        all_bars: List[BarData] = []
-        total_chunks = len(chunks)
-
-        for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
-            delta_days = (chunk_end - chunk_start).days + 1
-            dur_str = f"{delta_days} D"
-            print(f"[{i}/{total_chunks}] Fetching {chunk_start.date()} → {chunk_end.date()} "
-                  f"({dur_str}) ...", end=" ", flush=True)
-
-            try:
-                bars = _fetch_chunk(
-                    ib, resolved, chunk_end, dur_str,
-                    args.bar_size, args.what_to_show, use_rth,
-                )
-            except Exception as e:
-                print(f"\nERROR on chunk {i}: {e}", file=sys.stderr)
-                print("Saving data fetched so far...", file=sys.stderr)
-                break
-
-            print(f"{len(bars)} bars")
-            if bars:
-                all_bars.extend(bars)
-
-        # ── Deduplicate bars (chunk boundaries may overlap) ──────────────
-        if all_bars:
-            seen = set()
-            deduped: List[BarData] = []
-            for b in all_bars:
-                key = b.date
-                if key not in seen:
-                    seen.add(key)
-                    deduped.append(b)
-            deduped.sort(key=lambda b: b.date)
-            all_bars = deduped
-
-        # ── Save to CSV ──────────────────────────────────────────────────
+        # Save to CSV
         if args.output:
             out_path = args.output
         else:
