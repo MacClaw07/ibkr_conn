@@ -1,66 +1,29 @@
-#!/usr/bin/env python3
 """
-IBKR Historical Bar Downloader
-================================
-Downloads 1-minute OHLCV bar data from Interactive Brokers and saves to CSV.
+IBKR Historical Bar Downloader — library module
+=================================================
+Provides bar-downloading functions imported by run_ibkr.py.
 
-Two instrument modes:
-  --es            CME E-mini S&P 500 front-month contract (default: Sep 2026)
-  --ric RIC       Resolve a futures contract by RIC code (e.g. ESU6)
-
-Usage:
-  python3 download_bars.py --date 2026-06-22:2026-06-26
-  python3 download_bars.py --date 2026-06-22:2026-06-26 --es 202612        # Dec 2026
-  python3 download_bars.py --date 2026-06-22:2026-06-26 --ric ESU6
-  python3 download_bars.py --date 2026-06-22:2026-06-26 --ric ESU6 --bar-size "5 mins"
-  python3 download_bars.py --date 2026-06-22:2026-06-26 --ric ES --exchange CME --sec-type FUT \
-      --currency USD --multiplier 50
+Contains: _fetch_chunk, _generate_chunks, _download_bars, _bars_to_csv, main_bars
 """
 
-import argparse
 import csv
-import json
 import os
 import sys
-import urllib.parse
-import urllib.request
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
-from ib_insync import IB, Contract, Future, Stock, BarData
+from ib_insync import BarData
+
+from ibkr_utils import (
+    connect_ib,
+    get_contract,
+    parse_date_range,
+    write_bars_to_questdb,
+    HOST, PORT, CLIENT_ID, BAR_SIZE, WHAT_TO_SHOW, USE_RTH, OUTPUT_DIR,
+)
 
 
-# ── defaults ────────────────────────────────────────────────────────────────
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 4002
-DEFAULT_CLIENT_ID = 100
-DEFAULT_BAR_SIZE = "1 min"
-DEFAULT_WHAT_TO_SHOW = "TRADES"
-DEFAULT_USE_RTH = True
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _parse_date_range(
-    date_arg: str,
-) -> Tuple[datetime, datetime]:
-    """Parse 'yyyy-mm-dd:yyyy-mm-dd' into (start_date, end_date)."""
-    try:
-        start_str, end_str = date_arg.split(":")
-    except ValueError:
-        raise SystemExit(
-            "ERROR: --date must be in format yyyy-mm-dd:yyyy-mm-dd\n"
-            f"       got: {date_arg}"
-        )
-
-    start = datetime.strptime(start_str.strip(), "%Y-%m-%d")
-    end = datetime.strptime(end_str.strip(), "%Y-%m-%d")
-
-    if start > end:
-        raise SystemExit("ERROR: start date must be before end date")
-
-    return start, end
-
+# ── chunking & fetching ─────────────────────────────────────────────────────
 
 def _generate_chunks(
     start: datetime, end: datetime, chunk_days: int = 5
@@ -75,81 +38,9 @@ def _generate_chunks(
     return chunks
 
 
-def _build_es_contract(contract_month: str) -> Future:
-    """
-    Build a CME ES future contract.
-    contract_month: 'YYYYMM' e.g. '202609'
-    """
-    return Future(symbol="ES", lastTradeDateOrContractMonth=contract_month, exchange="CME")
-
-
-def _build_ric_contract(
-    ric: str,
-    exchange: str = "CME",
-    sec_type: str = "FUT",
-    currency: str = "USD",
-    multiplier: Optional[str] = None,
-) -> Contract:
-    """
-    Build a contract from RIC-like parameters.
-    RIC format for futures: root symbol + month code + year digit, e.g. ESU6 = ES Sep 2026.
-
-    If sec_type is FUT, we treat it as a Future. Otherwise it's a Stock contract
-    (allows stocks, ETFs, indices via --ric with --sec-type STK).
-    """
-    if sec_type.upper() == "FUT":
-        # Parse RIC: extract root symbol (letters before the month code)
-        # e.g. ESU6 -> symbol=ES, month_code=U, year_digit=6
-        ric = ric.strip().upper()
-        # Find where the month code is — usually the last 2 chars for RIC
-        if len(ric) >= 3:
-            # Common pattern: <root><month_code><year_digit>
-            # But root length varies. We'll take the last 2 chars as month+year
-            month_code = ric[-2]
-            year_digit = ric[-1]
-            root = ric[:-2]
-
-            # Map month code to contract month number
-            month_map = {"H": "03", "M": "06", "U": "09", "Z": "12",
-                         "F": "01", "G": "02", "J": "04", "K": "05",
-                         "N": "07", "Q": "08", "V": "10", "X": "11"}
-
-            if month_code not in month_map:
-                raise SystemExit(
-                    f"ERROR: unknown month code '{month_code}' in RIC '{ric}'\n"
-                    f"       valid codes: H,M,U,Z (quarterly) or F,G,J,K,N,Q,V,X"
-                )
-
-            month_num = month_map[month_code]
-            # Year: digit is last digit of year. We'll infer the decade.
-            # '6' could be 2026, 2036, etc. Use current year as baseline.
-            current_year = datetime.now().year
-            decade_base = (current_year // 10) * 10
-            year_candidate = decade_base + int(year_digit)
-            if year_candidate < current_year - 2:
-                year_candidate += 10  # next decade
-
-            contract_month_str = f"{year_candidate}{month_num}"
-
-            c = Future(
-                symbol=root,
-                lastTradeDateOrContractMonth=contract_month_str,
-                exchange=exchange,
-                currency=currency,
-            )
-            if multiplier:
-                c.multiplier = multiplier
-            return c
-        else:
-            raise SystemExit(f"ERROR: RIC too short: '{ric}'")
-    else:
-        # Stock / ETF / Index
-        return Stock(symbol=ric, exchange=exchange, currency=currency)
-
-
 def _fetch_chunk(
-    ib: IB,
-    contract: Contract,
+    ib,
+    contract,
     end_dt: datetime,
     duration_str: str,
     bar_size: str,
@@ -157,10 +48,7 @@ def _fetch_chunk(
     use_rth: bool,
     timeout: float = 120,
 ) -> List[BarData]:
-    """Fetch one chunk of historical bars."""
-    # IB format: yyyymmdd HH:MM:SS TZ (with spaces between all parts)
-    # OR: yyyymmdd-HH:MM:SS for UTC (with dash between date and time).
-    # Using UTC format is more reliable across IB versions.
+    """Fetch one chunk of historical bars from IB."""
     end_str = end_dt.strftime("%Y%m%d-%H:%M:%S")
     return ib.reqHistoricalData(
         contract,
@@ -174,248 +62,21 @@ def _fetch_chunk(
     )
 
 
-def _bars_to_csv(bars: List[BarData], path: str) -> int:
-    """Write bars to CSV. Returns number of rows written."""
-    with open(path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["datetime", "open", "high", "low", "close", "volume", "bar_count", "average"])
-        for b in bars:
-            w.writerow([
-                b.date.strftime("%Y-%m-%d %H:%M:%S"),
-                b.open,
-                b.high,
-                b.low,
-                b.close,
-                b.volume,
-                b.barCount,
-                b.average,
-            ])
-    return len(bars)
-
-
-def _bars_to_questdb(
-    bars: List[BarData],
-    contract: Contract,
-    expiry_date: str,
-    ric_label: str,
-    questdb_url: str = "http://127.0.0.1:9000",
-) -> int:
-    """Write bars to QuestDB via ILP (InfluxDB Line Protocol).
-
-    Args:
-        bars: List of BarData from ib_insync.
-        contract: The resolved IB contract (for getting RIC symbol).
-        expiry_date: Expiry date as YYYY-MM-DD.
-        ric_label: RIC label e.g. 'ESU6'.
-        questdb_url: QuestDB REST base URL.
-
-    Returns:
-        Number of rows written.
-    """
-    if not bars:
-        return 0
-
-    # ILP measurement name is the table name
-    measurement = "futures_hist"
-
-    lines = []
-    for b in bars:
-        # datetime → nanoseconds since epoch
-        ts_ns = int(b.date.timestamp() * 1_000_000_000)
-
-        # Tags: ric, expiry (must be comma-escaped, but our values are safe)
-        # Format: measurement,tag=value,tag=value field=value,field=value timestamp
-        
-        # Build fields string
-        fields = []
-        if b.open is not None and b.open == b.open:  # also check not NaN
-            fields.append(f"open={b.open}")
-        if b.high is not None and b.high == b.high:
-            fields.append(f"high={b.high}")
-        if b.low is not None and b.low == b.low:
-            fields.append(f"low={b.low}")
-        if b.close is not None and b.close == b.close:
-            fields.append(f"close={b.close}")
-        if b.volume is not None:
-            fields.append(f"volume={int(b.volume)}i")
-        if b.barCount is not None:
-            fields.append(f"bar_count={int(b.barCount)}i")
-        if b.average is not None and b.average == b.average:
-            fields.append(f"average={b.average}")
-
-        if not fields:
-            continue
-
-        line = f"{measurement},ric={ric_label},expiry={expiry_date} {','.join(fields)} {ts_ns}"
-        lines.append(line)
-
-    # Batch-send: 1000 rows per POST
-    batch_size = 1000
-    total_written = 0
-    write_url = f"{questdb_url}/write"
-
-    for i in range(0, len(lines), batch_size):
-        batch = lines[i:i + batch_size]
-        body = "\n".join(batch).encode("utf-8")
-
-        req = urllib.request.Request(
-            write_url,
-            data=body,
-            method="POST",
-            headers={"Content-Type": "text/plain; charset=utf-8"},
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                if resp.status == 204:
-                    total_written += len(batch)
-                else:
-                    print(f"  WARNING: QuestDB /write returned HTTP {resp.status}",
-                          file=sys.stderr)
-        except urllib.error.URLError as e:
-            print(f"  ERROR writing batch to QuestDB: {e}", file=sys.stderr)
-
-    return total_written
-
-
-# ── argparse builder ─────────────────────────────────────────────────────────
-
-def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the ArgumentParser with all options."""
-    parser = argparse.ArgumentParser(
-        description="Download IBKR historical 1-minute bar data",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-
-    # Date range
-    parser.add_argument(
-        "--date",
-        required=True,
-        help="Date range in ISO format: yyyy-mm-dd:yyyy-mm-dd",
-    )
-
-    # Instrument selection (mutually exclusive group)
-    inst = parser.add_mutually_exclusive_group(required=True)
-    inst.add_argument(
-        "--es",
-        nargs="?",
-        const="202609",
-        metavar="YYYYMM",
-        help="CME ES futures contract month (default: 202609 = Sep 2026)",
-    )
-    inst.add_argument(
-        "--ric",
-        type=str,
-        metavar="RIC",
-        help="RIC code for futures, e.g. ESU6 for ES Sep 2026",
-    )
-
-    # --ric overrides
-    parser.add_argument("--exchange", default="CME", help="Exchange (default: CME)")
-    parser.add_argument("--sec-type", default="FUT", help="Security type: FUT, STK, etc.")
-    parser.add_argument("--currency", default="USD", help="Currency (default: USD)")
-    parser.add_argument("--multiplier", type=str, default=None, help="Contract multiplier")
-
-    # Bar options
-    parser.add_argument("--bar-size", default=DEFAULT_BAR_SIZE, help=f"Bar size (default: {DEFAULT_BAR_SIZE})")
-    parser.add_argument("--what-to-show", default=DEFAULT_WHAT_TO_SHOW, help=f"Data type (default: {DEFAULT_WHAT_TO_SHOW})")
-    parser.add_argument("--use-rth", action="store_true", default=DEFAULT_USE_RTH, help="Regular trading hours only")
-    parser.add_argument("--all-hours", action="store_true", help="Include extended hours (overrides --use-rth)")
-
-    # Connection
-    parser.add_argument("--host", default=DEFAULT_HOST, help=f"IB Gateway host (default: {DEFAULT_HOST})")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"IB Gateway port (default: {DEFAULT_PORT})")
-    parser.add_argument("--client-id", type=int, default=DEFAULT_CLIENT_ID, help=f"Client ID (default: {DEFAULT_CLIENT_ID})")
-
-    # Output
-    parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV path (default: auto-generated)")
-    parser.add_argument("--format", choices=["questdb", "csv"], default="questdb",
-                        help="Output format: questdb (default) or csv")
-
-    return parser
-
-
-# ── contract resolution ─────────────────────────────────────────────────────
-
-def _get_contract(ib: IB, args: argparse.Namespace) -> Tuple[Contract, str, str]:
-    """
-    Build a contract from CLI args and resolve it via reqContractDetails.
-    Requires an already-connected IB instance.
-
-    Returns:
-        (resolved_contract, label, expiry_date) — label is a human-readable
-        string for the instrument, expiry_date is YYYY-MM-DD.
-    """
-    if args.es:
-        contract = _build_es_contract(args.es)
-        initial_label = f"ES{args.es}"
-    else:
-        contract = _build_ric_contract(
-            args.ric,
-            exchange=args.exchange,
-            sec_type=args.sec_type,
-            currency=args.currency,
-            multiplier=args.multiplier,
-        )
-        initial_label = args.ric.strip().upper()
-
-    print(f"Resolving contract: {contract} ...")
-    details = ib.reqContractDetails(contract)
-    if not details:
-        print(f"ERROR: Could not resolve contract {contract}", file=sys.stderr)
-        sys.exit(1)
-
-    cd = details[0]
-    resolved = cd.contract
-
-    # Use the resolved localSymbol as the authoritative RIC label
-    ric_label = resolved.localSymbol if resolved.localSymbol else initial_label
-
-    # Extract expiry date from contract details
-    expiry_date = ""
-    if hasattr(resolved, 'lastTradeDateOrContractMonth') and resolved.lastTradeDateOrContractMonth:
-        ltd = resolved.lastTradeDateOrContractMonth
-        # Could be like '20260918' (full date) or '202609' (YYYYMM)
-        if len(ltd) == 8:
-            expiry_date = f"{ltd[0:4]}-{ltd[4:6]}-{ltd[6:8]}"
-        elif len(ltd) == 6:
-            # YYYYMM — use the 3rd Friday heuristic for quarterly futures
-            # or just use last day of month as fallback
-            expiry_date = f"{ltd[0:4]}-{ltd[4:6]}-01"  # placeholder
-    if not expiry_date and hasattr(cd, 'realExpirationDate') and cd.realExpirationDate:
-        expiry_date = cd.realExpirationDate  # Usually 'YYYYMMDD'
-        if len(expiry_date) == 8:
-            expiry_date = f"{expiry_date[0:4]}-{expiry_date[4:6]}-{expiry_date[6:8]}"
-
-    print(f"Resolved: {resolved.localSymbol} ({resolved.symbol}) "
-          f"Exchange={resolved.exchange} Currency={resolved.currency} "
-          f"Multiplier={resolved.multiplier} Expiry={expiry_date}")
-    return resolved, ric_label, expiry_date
-
-
-# ── download loop ────────────────────────────────────────────────────────────
-
 def _download_bars(
-    ib: IB,
-    contract: Contract,
+    ib,
+    contract,
     start_date: datetime,
     end_date: datetime,
     bar_size: str,
     what_to_show: str,
     use_rth: bool,
 ) -> List[BarData]:
-    """
-    Download historical bars in chunks, deduplicate, and return sorted list.
-
-    Handles the full chunking → fetching → dedup pipeline for a date range.
-    """
+    """Download historical bars in chunks, deduplicate, and return sorted list."""
     chunks = _generate_chunks(start_date, end_date, chunk_days=5)
     all_bars: List[BarData] = []
     total_chunks = len(chunks)
 
     for i, (chunk_start, chunk_end) in enumerate(chunks, 1):
-        # Use end-of-day (23:59:59) so the duration covers the full last day
         chunk_end_fixed = chunk_end.replace(hour=23, minute=59, second=59)
         delta_days = (chunk_end - chunk_start).days + 1
         dur_str = f"{delta_days} D"
@@ -451,44 +112,46 @@ def _download_bars(
     return all_bars
 
 
-# ── main ─────────────────────────────────────────────────────────────────────
+def _bars_to_csv(bars: List[BarData], path: str) -> int:
+    """Write bars to CSV. Returns number of rows written."""
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["datetime", "open", "high", "low", "close", "volume", "bar_count", "average"])
+        for b in bars:
+            w.writerow([
+                b.date.strftime("%Y-%m-%d %H:%M:%S"),
+                b.open,
+                b.high,
+                b.low,
+                b.close,
+                b.volume,
+                b.barCount,
+                b.average,
+            ])
+    return len(bars)
 
-def main():
-    parser = _build_parser()
-    args = parser.parse_args()
 
-    # Parse date range
-    start_date, end_date = _parse_date_range(args.date)
-    use_rth = False if args.all_hours else args.use_rth
+# ── entry point for run_ibkr.py ────────────────────────────────────────────
 
-    # Connect to IB Gateway
-    ib = IB()
+def main_bars(args):
+    """Entry point for bar download mode. Accepts parsed argparse namespace."""
+    ib = connect_ib(args.host, args.port, args.client_id)
+
     try:
-        print(f"Connecting to IB Gateway at {args.host}:{args.port} ...")
-        ib.connect(args.host, args.port, clientId=args.client_id)
-        print(f"Connected. Account: {ib.managedAccounts()}")
-    except Exception as e:
-        print(f"ERROR: Could not connect to IB Gateway: {e}", file=sys.stderr)
-        print("Is the Gateway running? Try: ~/.local/bin/ibkr-start.sh", file=sys.stderr)
-        sys.exit(1)
+        resolved, label, expiry_date = get_contract(ib, args)
+        start_date, end_date = parse_date_range(args.date)
+        use_rth = False if args.all_hours else args.use_rth
 
-    try:
-        # Build and resolve contract
-        resolved, label, expiry_date = _get_contract(ib, args)
-
-        # Download bars
         all_bars = _download_bars(
             ib, resolved,
             start_date, end_date,
             args.bar_size, args.what_to_show, use_rth,
         )
 
-        # Write output
         if args.format == "questdb":
-            written = _bars_to_questdb(all_bars, resolved, expiry_date, label)
+            written = write_bars_to_questdb(all_bars, label, expiry_date)
             print(f"\nDone. {written} rows written to QuestDB (futures_hist)")
         else:
-            # CSV format
             if args.output:
                 out_path = args.output
             else:
@@ -508,7 +171,3 @@ def main():
         print("Disconnecting...")
         ib.disconnect()
         print("Disconnected.")
-
-
-if __name__ == "__main__":
-    main()
