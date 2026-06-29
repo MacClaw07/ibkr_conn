@@ -162,14 +162,16 @@ def get_contract(ib: IB, args) -> Tuple[Contract, str, str]:
         contract = build_es_contract(args.es)
         initial_label = f"ES{args.es}"
     else:
+        # args.ric may be a list (ticks mode) or single string (bars mode)
+        ric_val = args.ric if isinstance(args.ric, str) else args.ric[0]
         contract = build_ric_contract(
-            args.ric,
+            ric_val,
             exchange=args.exchange,
             sec_type=args.sec_type,
             currency=args.currency,
             multiplier=args.multiplier,
         )
-        initial_label = args.ric.strip().upper()
+        initial_label = ric_val.strip().upper()
 
     print(f"Resolving contract: {contract} ...")
     details = ib.reqContractDetails(contract)
@@ -396,9 +398,9 @@ examples:
     )
     inst.add_argument(
         "--ric",
-        type=str,
+        nargs="+",
         metavar="RIC",
-        help="RIC code for futures, e.g. ESU6 for ES Sep 2026",
+        help="One or more RIC codes for futures, e.g. ESU6 NQU6 CLU6",
     )
 
     # --ric overrides
