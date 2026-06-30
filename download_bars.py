@@ -1,7 +1,7 @@
 """
 IBKR Historical Bar Downloader — library module
 =================================================
-Provides bar-downloading functions imported by run_ibkr.py.
+Provides bar-downloading functions imported by ibkr_manager.py.
 
 Contains: _fetch_chunk, _generate_chunks, _download_bars, _bars_to_csv, main_bars
 """
@@ -18,17 +18,26 @@ from ibkr_utils import (
     connect_ib,
     get_contract,
     parse_date_range,
-    write_bars_to_questdb,
     HOST, PORT, CLIENT_ID, BAR_SIZE, WHAT_TO_SHOW, USE_RTH, OUTPUT_DIR,
 )
+from questdb_manager import write_bars_to_questdb
+from pipeline_logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ── chunking & fetching ─────────────────────────────────────────────────────
 
+##
+# Split a date range [start, end] into chunks of chunk_days.
+#
+# @param start: Start datetime.
+# @param end: End datetime.
+# @param chunk_days: Maximum days per chunk.
+# @return: A list of (chunk_start, chunk_end) tuples.
 def _generate_chunks(
     start: datetime, end: datetime, chunk_days: int = 5
 ) -> List[Tuple[datetime, datetime]]:
-    """Split [start, end] into chunks of chunk_days each."""
     chunks = []
     cursor = start
     while cursor <= end:
@@ -38,6 +47,18 @@ def _generate_chunks(
     return chunks
 
 
+##
+# Fetch one chunk of historical bars from IB.
+#
+# @param ib: Connected ib_insync.IB instance.
+# @param contract: The resolved contract.
+# @param end_dt: Ending datetime for the request.
+# @param duration_str: Duration string (e.g. "5 D").
+# @param bar_size: Bar size string (e.g. "1 min").
+# @param what_to_show: Data type (e.g. "TRADES").
+# @param use_rth: If True, restrict to regular trading hours.
+# @param timeout: IB request timeout in seconds.
+# @return: A list of ib_insync.BarData.
 def _fetch_chunk(
     ib,
     contract,
@@ -48,7 +69,6 @@ def _fetch_chunk(
     use_rth: bool,
     timeout: float = 120,
 ) -> List[BarData]:
-    """Fetch one chunk of historical bars from IB."""
     end_str = end_dt.strftime("%Y%m%d-%H:%M:%S")
     return ib.reqHistoricalData(
         contract,
@@ -62,6 +82,17 @@ def _fetch_chunk(
     )
 
 
+##
+# Download historical bars in 5-day chunks, deduplicate, and return.
+#
+# @param ib: Connected ib_insync.IB instance.
+# @param contract: The resolved contract.
+# @param start_date: Start datetime for the download.
+# @param end_date: End datetime for the download.
+# @param bar_size: Bar size string.
+# @param what_to_show: Data type.
+# @param use_rth: Restrict to RTH.
+# @return: A sorted, deduplicated list of ib_insync.BarData.
 def _download_bars(
     ib,
     contract,
@@ -71,7 +102,6 @@ def _download_bars(
     what_to_show: str,
     use_rth: bool,
 ) -> List[BarData]:
-    """Download historical bars in chunks, deduplicate, and return sorted list."""
     chunks = _generate_chunks(start_date, end_date, chunk_days=5)
     all_bars: List[BarData] = []
     total_chunks = len(chunks)
@@ -80,8 +110,8 @@ def _download_bars(
         chunk_end_fixed = chunk_end.replace(hour=23, minute=59, second=59)
         delta_days = (chunk_end - chunk_start).days + 1
         dur_str = f"{delta_days} D"
-        print(f"[{i}/{total_chunks}] Fetching {chunk_start.date()} → {chunk_end.date()} "
-              f"({dur_str}) ...", end=" ", flush=True)
+        logger.info("[%d/%d] Fetching %s -> %s (%s) ...",
+                     i, total_chunks, chunk_start.date(), chunk_end.date(), dur_str)
 
         try:
             bars = _fetch_chunk(
@@ -89,15 +119,14 @@ def _download_bars(
                 bar_size, what_to_show, use_rth,
             )
         except Exception as e:
-            print(f"\nERROR on chunk {i}: {e}", file=sys.stderr)
-            print("Saving data fetched so far...", file=sys.stderr)
+            logger.error("ERROR on chunk %d: %s", i, e)
+            logger.info("Saving data fetched so far...")
             break
 
-        print(f"{len(bars)} bars")
+        logger.info("[%d/%d] %d bars", i, total_chunks, len(bars))
         if bars:
             all_bars.extend(bars)
 
-    # Deduplicate bars (chunk boundaries may overlap)
     if all_bars:
         seen = set()
         deduped: List[BarData] = []
@@ -112,8 +141,13 @@ def _download_bars(
     return all_bars
 
 
+##
+# Write bars to a CSV file.
+#
+# @param bars: List of ib_insync.BarData.
+# @param path: Output file path.
+# @return: Number of rows written.
 def _bars_to_csv(bars: List[BarData], path: str) -> int:
-    """Write bars to CSV. Returns number of rows written."""
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["datetime", "open", "high", "low", "close", "volume", "bar_count", "average"])
@@ -131,10 +165,13 @@ def _bars_to_csv(bars: List[BarData], path: str) -> int:
     return len(bars)
 
 
-# ── entry point for run_ibkr.py ────────────────────────────────────────────
+# ── entry point for ibkr_manager.py ────────────────────────────────────────
 
+##
+# Entry point for bar download mode.  Accepts a parsed argparse namespace.
+#
+# @param args: An argparse.Namespace with connection and bar-pull args.
 def main_bars(args):
-    """Entry point for bar download mode. Accepts parsed argparse namespace."""
     ib = connect_ib(args.host, args.port, args.client_id)
 
     try:
@@ -150,7 +187,7 @@ def main_bars(args):
 
         if args.format == "questdb":
             written = write_bars_to_questdb(all_bars, label, expiry_date)
-            print(f"\nDone. {written} rows written to QuestDB (futures_hist)")
+            logger.info("\nDone. %d rows written to QuestDB (futures_hist)", written)
         else:
             if args.output:
                 out_path = args.output
@@ -159,15 +196,15 @@ def main_bars(args):
                 out_path = os.path.join(OUTPUT_DIR, f"{label}_{date_tag}_{args.bar_size.replace(' ', '')}.csv")
 
             written = _bars_to_csv(all_bars, out_path)
-            print(f"\nDone. {written} bars saved to {out_path}")
+            logger.info("\nDone. %d bars saved to %s", written, out_path)
 
         if not all_bars:
-            print("WARNING: No data returned. Possible reasons:")
-            print("  - No other TWS/Gateway session can be active (error 162)")
-            print("  - Paper accounts get delayed data only")
-            print("  - Markets may be closed (check trading hours)")
+            logger.warning("No data returned. Possible reasons:")
+            logger.info("  - No other TWS/Gateway session can be active (error 162)")
+            logger.info("  - Paper accounts get delayed data only")
+            logger.info("  - Markets may be closed (check trading hours)")
 
     finally:
-        print("Disconnecting...")
+        logger.info("Disconnecting...")
         ib.disconnect()
-        print("Disconnected.")
+        logger.info("Disconnected.")

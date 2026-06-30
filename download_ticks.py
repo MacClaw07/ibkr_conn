@@ -1,7 +1,7 @@
 """
 IBKR Live Tick Streamer — library module
 =========================================
-Provides tick-streaming functions imported by run_ibkr.py.
+Provides tick-streaming functions imported by ibkr_manager.py.
 
 Supports multiple contracts via --ric RIC1 RIC2 ...
 
@@ -16,18 +16,27 @@ from typing import Dict, List, Optional, Tuple
 from ibkr_utils import (
     build_ric_contract,
     connect_ib,
-    _format_ilp_timestamp,
     HOST, PORT, CLIENT_ID,
 )
+from questdb_manager import (
+    _format_ilp_timestamp,
+    _send_ilp_batch,
+)
+from pipeline_logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # ── ILP line builder (tick-specific) ────────────────────────────────────────
 
+##
+# Build a single ILP line from an ib_insync Ticker for the futures_tick table.
+#
+# @param ticker: An ib_insync.Ticker instance.
+# @param ric_label: RIC label string (e.g. "ESU6").
+# @param expiry_date: Expiry date as YYYY-MM-DD.
+# @return: An ILP-formatted string, or None if the ticker has no useful data.
 def _build_ilp_line(ticker, ric_label: str, expiry_date: str) -> Optional[str]:
-    """Build a single ILP line from an ib_insync Ticker for the futures_tick table.
-
-    Returns None if no useful data is present.
-    """
     measurement = "futures_tick"
 
     if ticker.time is None:
@@ -61,14 +70,24 @@ def _build_ilp_line(ticker, ric_label: str, expiry_date: str) -> Optional[str]:
 
 # ── contract resolution helper ─────────────────────────────────────────────
 
+##
+# Resolve one RIC and return a (contract, ric_label, expiry_date) tuple.
+#
+# @param ib: Connected ib_insync.IB instance.
+# @param ric: RIC string (e.g. "ESU6").
+# @param exchange: Exchange name.
+# @param sec_type: Security type.
+# @param currency: Currency code.
+# @param multiplier: Optional contract multiplier.
+# @return: A tuple of (resolved_contract, ric_label, expiry_date).
+# @raise SystemExit: If the contract cannot be resolved.
 def _resolve_single(ib, ric: str, exchange: str, sec_type: str,
                     currency: str, multiplier) -> Tuple:
-    """Resolve one RIC and return (contract, ric_label, expiry_date)."""
     contract = build_ric_contract(ric, exchange, sec_type, currency, multiplier)
-    print(f"Resolving contract: {contract} ...")
+    logger.info("Resolving contract: %s ...", contract)
     details = ib.reqContractDetails(contract)
     if not details:
-        print(f"ERROR: Could not resolve contract {contract}", file=sys.stderr)
+        logger.error("Could not resolve contract %s", contract)
         sys.exit(1)
     cd = details[0]
     resolved = cd.contract
@@ -87,38 +106,45 @@ def _resolve_single(ib, ric: str, exchange: str, sec_type: str,
                 expiry_date = f"{re[0:4]}-{re[4:6]}-{re[6:8]}"
             else:
                 expiry_date = re
-    print(f"Resolved: {resolved.localSymbol} ({resolved.symbol}) "
-          f"Exchange={resolved.exchange} Currency={resolved.currency} "
-          f"Multiplier={resolved.multiplier} Expiry={expiry_date}")
+    logger.info("Resolved: %s (%s) Exchange=%s Currency=%s Multiplier=%s Expiry=%s",
+                resolved.localSymbol, resolved.symbol,
+                resolved.exchange, resolved.currency,
+                resolved.multiplier, expiry_date)
     return resolved, ric_label, expiry_date
 
 
 # ── live streaming loop ─────────────────────────────────────────────────────
 
-def _stream_live_ticks(
+##
+# Stream live L1 tick data from multiple IBKR contracts to QuestDB.
+#
+# Subscribes to market data for each contract, deduplicates unchanged
+# ticks, and flushes ILP batches to QuestDB every second (or every 100
+# lines, whichever comes first).
+#
+# @param ib: Connected ib_insync.IB instance.
+# @param contracts: List of (contract, ric_label, expiry_date) tuples.
+# @param duration_secs: Max seconds to stream (0 = until Ctrl+C).
+# @param questdb_url: QuestDB REST base URL.
+# @return: A dict mapping ric_label to written row count.
+def stream_live_ticks(
     ib,
     contracts: List[Tuple],  # [(contract, ric_label, expiry_date), ...]
     duration_secs: int,
     questdb_url: str,
 ) -> Dict[str, dict]:
-    """Stream live L1 tick data from multiple IBKR contracts to QuestDB.
-
-    Returns per-contract stats dict keyed by ric_label.
-    """
     ib.reqMarketDataType(3)  # DELAYED — paper account has no live data subscription
 
-    # Per-contract state
     tickers = []
     tick_counts: Dict[str, int] = {}
     dup_counts: Dict[str, int] = {}
     written_counts: Dict[str, int] = {}
-    _last_fields: Dict[str, tuple] = {}  # ric_label -> field tuple
+    _last_fields: Dict[str, tuple] = {}
     lines_buf: List[str] = []
     running = True
     last_status_time = time.time()
 
     def _fv(val):
-        """Normalize value: None/NaN → None."""
         return val if (val is not None and val == val) else None
 
     for contract, ric_label, expiry_date in contracts:
@@ -130,7 +156,6 @@ def _stream_live_ticks(
         ticker = ib.reqMktData(contract, '', False, False)
         tickers.append((ticker, contract))
 
-        # Closure captures per-contract ric_label, expiry_date
         def make_handler(label, expiry):
             def on_tick(tick):
                 nonlocal running
@@ -153,11 +178,11 @@ def _stream_live_ticks(
             return on_tick
 
         ticker.updateEvent += make_handler(ric_label, expiry_date)
-        print(f"  Subscribed: {ric_label} (expiry: {expiry_date})")
+        logger.info("  Subscribed: %s (expiry: %s)", ric_label, expiry_date)
 
     def _signal_handler(signum, frame):
         nonlocal running
-        print("\nCtrl+C received. Shutting down...")
+        logger.info("Ctrl+C received. Shutting down...")
         running = False
 
     original_sigint = signal.signal(signal.SIGINT, _signal_handler)
@@ -165,25 +190,23 @@ def _stream_live_ticks(
     start_time = time.time()
     last_flush = start_time
 
-    print(f"\nStreaming {len(contracts)} contract(s), duration: {duration_secs}s (0 = until Ctrl+C)\n")
+    logger.info("\nStreaming %d contract(s), duration: %ds (0 = until Ctrl+C)",
+                len(contracts), duration_secs)
 
     try:
         while running:
             now = time.time()
 
             if duration_secs > 0 and (now - start_time) >= duration_secs:
-                print(f"Duration ({duration_secs}s) reached.")
+                logger.info("Duration (%ds) reached.", duration_secs)
                 running = False
                 break
 
             elapsed_since_flush = now - last_flush
             if len(lines_buf) >= 100 or elapsed_since_flush >= 1.0:
                 if lines_buf:
-                    from ibkr_utils import _send_ilp_batch
                     _send_ilp_batch(lines_buf, questdb_url)
-                    # Increment per-contract written counts from this batch
                     for line in lines_buf:
-                        # Parse ric= from ILP line: "measurement,ric=XXX,..."
                         ric_start = line.find("ric=") + 4
                         ric_end = line.find(",", ric_start)
                         ric = line[ric_start:ric_end]
@@ -198,7 +221,8 @@ def _stream_live_ticks(
                 total_written = sum(written_counts.values())
                 total_dupes = sum(dup_counts.values())
                 per = " ".join(f"{r}:{tick_counts[r]}" for r in sorted(tick_counts))
-                print(f"[{elapsed}s] ticks: {total_ticks} ({per}) | written: {total_written} | dupes: {total_dupes}")
+                logger.info("[%ds] ticks: %d (%s) | written: %d | dupes: %d",
+                            elapsed, total_ticks, per, total_written, total_dupes)
                 last_status_time = now
 
             ib.sleep(0.05)
@@ -213,7 +237,6 @@ def _stream_live_ticks(
                 pass
 
         if lines_buf:
-            from ibkr_utils import _send_ilp_batch
             _send_ilp_batch(lines_buf, questdb_url)
             for line in lines_buf:
                 ric_start = line.find("ric=") + 4
@@ -226,18 +249,23 @@ def _stream_live_ticks(
         total_ticks = sum(tick_counts.values())
         total_written = sum(written_counts.values())
         total_dupes = sum(dup_counts.values())
-        print(f"\nStreaming complete after {elapsed}s.")
-        print(f"Total ticks: {total_ticks} | written: {total_written} | dupes skipped: {total_dupes}")
+        logger.info("\nStreaming complete after %ds.", elapsed)
+        logger.info("Total ticks: %d | written: %d | dupes skipped: %d",
+                     total_ticks, total_written, total_dupes)
         for ric in sorted(tick_counts):
-            print(f"  {ric}: {tick_counts[ric]} ticks, {dup_counts[ric]} dupes, {written_counts[ric]} written")
+            logger.info("  %s: %d ticks, %d dupes, %d written",
+                        ric, tick_counts[ric], dup_counts[ric], written_counts[ric])
 
     return written_counts
 
 
-# ── entry point for run_ibkr.py ────────────────────────────────────────────
+# ── entry point for ibkr_manager.py ────────────────────────────────────────
 
+##
+# Entry point for tick streaming mode.  Supports multiple --ric values.
+#
+# @param args: An argparse.Namespace with connection and instrument args.
 def main_ticks(args):
-    """Entry point for tick streaming mode. Supports multiple --ric values."""
     ib = connect_ib(args.host, args.port, args.client_id)
 
     try:
@@ -249,13 +277,13 @@ def main_ticks(args):
             )
             contracts.append((resolved, label, expiry))
 
-        _stream_live_ticks(
+        stream_live_ticks(
             ib, contracts,
             args.duration,
             "http://127.0.0.1:9000",
         )
 
     finally:
-        print("Disconnecting...")
+        logger.info("Disconnecting...")
         ib.disconnect()
-        print("Disconnected.")
+        logger.info("Disconnected.")
