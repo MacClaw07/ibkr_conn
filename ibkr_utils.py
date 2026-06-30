@@ -37,7 +37,7 @@ def connect_ib(host: str = HOST, port: int = PORT, client_id: int = CLIENT_ID) -
     ib = IB()
     try:
         print(f"Connecting to IB Gateway at {host}:{port} ...")
-        ib.connect(host, port, clientId=client_id)
+        ib.connect(host, port, clientId=client_id, readonly=True)
         print(f"Connected. Account: {ib.managedAccounts()}")
         return ib
     except Exception as e:
