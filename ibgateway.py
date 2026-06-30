@@ -232,6 +232,19 @@ def stop_questdb():
     else:
         print("QuestDB stopped.")
 
+    # Clean PID files
+    _clean_project_pid_files()
+
+
+def _clean_project_pid_files():
+    """Remove .ibkr_stream.pid and .ibkr_gateway.pid if they exist."""
+    for name in (".ibkr_stream.pid", ".ibkr_gateway.pid"):
+        f = PROJECT_DIR / name
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
+
 
 # ── Gateway lifecycle ───────────────────────────────────────────────────────
 
@@ -296,16 +309,25 @@ def start_gateway():
         stderr=subprocess.DEVNULL,
     )
 
-    # Write PID file so we can check later
+    # Write PID files so we can check later
     pid_file = LOGS_DIR / "gateway.pid"
     pid_file.write_text(str(proc.pid))
+    # Also write canonical PID file for duplicate-instance guard
+    gw_pid_file = PROJECT_DIR / ".ibkr_gateway.pid"
+    gw_pid_file.write_text(str(os.getpid()) + "\n")
 
     print(f"Gateway subprocess started (PID {proc.pid}), waiting for exit...")
-    proc.wait()
-
-    print("Gateway subprocess terminated.")
-    if pid_file.exists():
-        pid_file.unlink()
+    try:
+        proc.wait()
+    finally:
+        print("Gateway subprocess terminated.")
+        if pid_file.exists():
+            pid_file.unlink()
+        # Clean canonical PID file
+        try:
+            gw_pid_file.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def wait_for_api(timeout: int = 120) -> bool:

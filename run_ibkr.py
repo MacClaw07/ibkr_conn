@@ -20,8 +20,64 @@ Examples:
 """
 
 import argparse
+import os
 import sys
 import threading
+from pathlib import Path
+
+
+# ── PID-file helpers ────────────────────────────────────────────────────────
+
+PROJECT_DIR = Path(__file__).resolve().parent
+STREAM_PID_FILE = PROJECT_DIR / ".ibkr_stream.pid"
+GATEWAY_PID_FILE = PROJECT_DIR / ".ibkr_gateway.pid"
+
+
+def _read_pid(pid_file: Path) -> int | None:
+    """Read a PID from a file.  Returns None if missing, empty, or unparseable."""
+    try:
+        text = pid_file.read_text().strip()
+        if not text:
+            return None
+        return int(text)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when a process with *pid* exists."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _check_and_lock_pid(pid_file: Path, label: str) -> bool:
+    """Idempotency guard.
+
+    Returns True when the current process should proceed (created a new PID
+    file).  Returns False (and prints a message) when another instance is
+    already holding the lock, in which case the caller should exit cleanly.
+    """
+    pid = _read_pid(pid_file)
+    if pid is not None and _pid_alive(pid):
+        print(f"{label} is already running (PID {pid}). Exiting.")
+        return False
+
+    # Remove any stale file before writing our own PID.
+    pid_file.write_text(str(os.getpid()) + "\n")
+    return True
+
+
+def _release_pid(pid_file: Path):
+    """Remove the PID file if it still belongs to us."""
+    pid = _read_pid(pid_file)
+    if pid == os.getpid():
+        try:
+            pid_file.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def build_ibkr_parser():
@@ -135,45 +191,51 @@ def main():
         main_ticks(args)
 
     elif args.mode == "stream":
-        from ibgateway import stream_ticks_loop, ensure_gateway, is_keepalive_enabled
+        # ── Duplicate-instance guard ──────────────────────────────────
+        if not _check_and_lock_pid(STREAM_PID_FILE, "Stream"):
+            sys.exit(0)
+        try:
+            from ibgateway import stream_ticks_loop, ensure_gateway, is_keepalive_enabled
 
-        if args.ric:
-            # CLI override mode: use RICs directly, not config file
-            if not is_keepalive_enabled():
-                print("Keepalive is disabled; enable with --mode start first.",
-                      file=sys.stderr)
-                sys.exit(1)
+            if args.ric:
+                # CLI override mode: use RICs directly, not config file
+                if not is_keepalive_enabled():
+                    print("Keepalive is disabled; enable with --mode start first.",
+                          file=sys.stderr)
+                    sys.exit(1)
 
-            if not ensure_gateway():
-                sys.exit(1)
+                if not ensure_gateway():
+                    sys.exit(1)
 
-            from ib_insync import IB
-            from download_ticks import _resolve_single, _stream_live_ticks
+                from ib_insync import IB
+                from download_ticks import _resolve_single, _stream_live_ticks
 
-            ib = IB()
-            try:
-                ib.connect("127.0.0.1", 4002, clientId=2,
-                           readonly=True, timeout=10)
-                contracts = []
-                for ric in args.ric:
-                    resolved, label, expiry = _resolve_single(
-                        ib, ric, args.exchange, args.sec_type,
-                        args.currency, args.multiplier,
-                    )
-                    contracts.append((resolved, label, expiry))
+                ib = IB()
                 try:
-                    _stream_live_ticks(
-                        ib, contracts, args.duration,
-                        "http://127.0.0.1:9000",
-                    )
-                finally:
+                    ib.connect("127.0.0.1", 4002, clientId=2,
+                               readonly=True, timeout=10)
+                    contracts = []
+                    for ric in args.ric:
+                        resolved, label, expiry = _resolve_single(
+                            ib, ric, args.exchange, args.sec_type,
+                            args.currency, args.multiplier,
+                        )
+                        contracts.append((resolved, label, expiry))
+                    try:
+                        _stream_live_ticks(
+                            ib, contracts, args.duration,
+                            "http://127.0.0.1:9000",
+                        )
+                    finally:
+                        ib.disconnect()
+                except Exception:
                     ib.disconnect()
-            except Exception:
-                ib.disconnect()
-                raise
-        else:
-            # Use config file
-            stream_ticks_loop()
+                    raise
+            else:
+                # Use config file
+                stream_ticks_loop()
+        finally:
+            _release_pid(STREAM_PID_FILE)
 
     elif args.mode == "status":
         from ibgateway import gateway_status
@@ -190,19 +252,29 @@ def main():
         print(f"Keepalive:   {'ENABLED' if s['keepalive'] else 'DISABLED'}")
 
     elif args.mode == "start":
-        from ibgateway import start_gateway, wait_for_api, set_keepalive
-        set_keepalive(True)
-        t = threading.Thread(target=start_gateway, daemon=True)
-        t.start()
-        if wait_for_api():
-            print("Gateway started and API ready.")
-        else:
-            print("WARNING: API not ready after start.", file=sys.stderr)
-            sys.exit(1)
+        # ── Duplicate-instance guard ──────────────────────────────────
+        if not _check_and_lock_pid(GATEWAY_PID_FILE, "Gateway"):
+            sys.exit(0)
+        try:
+            from ibgateway import start_gateway, wait_for_api, set_keepalive
+            set_keepalive(True)
+            t = threading.Thread(target=start_gateway, daemon=True)
+            t.start()
+            if wait_for_api():
+                print("Gateway started and API ready.")
+            else:
+                print("WARNING: API not ready after start.", file=sys.stderr)
+                sys.exit(1)
+        except Exception:
+            _release_pid(GATEWAY_PID_FILE)
+            raise
 
     elif args.mode == "stop":
         from ibgateway import stop_gateway
         stop_gateway()
+        # Clean both PID files on explicit stop
+        _release_pid(STREAM_PID_FILE)
+        _release_pid(GATEWAY_PID_FILE)
         print("Gateway stopped.")
 
 
