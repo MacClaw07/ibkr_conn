@@ -27,13 +27,37 @@ USE_RTH = True
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+# ── keepalive guard ─────────────────────────────────────────────────────────
+
+def require_keepalive(exit_code: int = 1):
+    """Check if .ibkr_keepalive contains 'true'. If not, print error and exit.
+
+    Call this before any IB API connection attempt.  Does NOT check for
+    ``--mode status`` or other diagnostic-only modes — those paths never
+    call ``connect_ib()``.
+    """
+    keepalive_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ibkr_keepalive")
+    if not os.path.isfile(keepalive_path):
+        print("keepalive is not enabled — aborting IB API calls", file=sys.stderr)
+        sys.exit(exit_code)
+    try:
+        value = open(keepalive_path).read().strip().lower()
+    except OSError:
+        print("keepalive is not enabled — aborting IB API calls", file=sys.stderr)
+        sys.exit(exit_code)
+    if value != "true":
+        print("keepalive is not enabled — aborting IB API calls", file=sys.stderr)
+        sys.exit(exit_code)
+
+
 # ── connection ──────────────────────────────────────────────────────────────
 
 def connect_ib(host: str = HOST, port: int = PORT, client_id: int = CLIENT_ID) -> IB:
     """Connect to IB Gateway/TWS and return the IB instance.
 
-    Prints connection info; exits on failure.
+    Prints connection info; exits on failure.  Checks keepalive first.
     """
+    require_keepalive()
     ib = IB()
     try:
         print(f"Connecting to IB Gateway at {host}:{port} ...")

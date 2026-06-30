@@ -15,5 +15,8 @@ IBControllerStart.ini
 # IB Gateway keepalive flag
 .ibkr_keepalive
 
+# Process PID files
+*.pid
+
 # Logs directory
 logs/

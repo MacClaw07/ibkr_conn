@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import sys
+import os
+from pathlib import Path
+
+# ── Auto-reinvoke with project venv if running system Python ──
+_venv_python = Path(__file__).resolve().parent / "venv" / "bin" / "python3"
+if _venv_python.exists() and not sys.executable.startswith(str(_venv_python)):
+    os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
 """Single entry point for IBKR data download tools and Gateway lifecycle.
 
 Modes:
@@ -207,12 +216,14 @@ def main():
                 if not ensure_gateway():
                     sys.exit(1)
 
+                import random
                 from ib_insync import IB
                 from download_ticks import _resolve_single, _stream_live_ticks
 
                 ib = IB()
                 try:
-                    ib.connect("127.0.0.1", 4002, clientId=2,
+                    ib.connect("127.0.0.1", 4002,
+                               clientId=random.randint(100, 999),
                                readonly=True, timeout=10)
                     contracts = []
                     for ric in args.ric:
@@ -256,12 +267,13 @@ def main():
         if not _check_and_lock_pid(GATEWAY_PID_FILE, "Gateway"):
             sys.exit(0)
         try:
-            from ibgateway import start_gateway, wait_for_api, set_keepalive
-            set_keepalive(True)
+            from ibgateway import start_gateway, wait_for_api
             t = threading.Thread(target=start_gateway, daemon=True)
             t.start()
             if wait_for_api():
                 print("Gateway started and API ready.")
+                print("NOTICE: .ibkr_keepalive was NOT set. Set manually to enable streaming:")
+                print("  echo true > ~/Documents/ibkr_conn/.ibkr_keepalive")
             else:
                 print("WARNING: API not ready after start.", file=sys.stderr)
                 sys.exit(1)
@@ -270,7 +282,8 @@ def main():
             raise
 
     elif args.mode == "stop":
-        from ibgateway import stop_gateway
+        from ibgateway import stop_gateway, set_keepalive
+        set_keepalive(False)
         stop_gateway()
         # Clean both PID files on explicit stop
         _release_pid(STREAM_PID_FILE)

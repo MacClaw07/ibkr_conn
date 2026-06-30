@@ -402,8 +402,7 @@ def stop_gateway():
     # Stop QuestDB
     stop_questdb()
 
-    # Clean keepalive
-    set_keepalive(False)
+    # Keepalive flag is NOT touched here — user sets it manually
     print("Gateway and services stopped.")
 
 
@@ -517,6 +516,8 @@ def set_keepalive(val: bool):
 
 def ensure_gateway(timeout: int = 120) -> bool:
     """Idempotent: if API ready → return True; if dead → start; if running but API gone → restart."""
+    from ibkr_utils import require_keepalive
+    require_keepalive()
     if is_port_open("127.0.0.1", IB_GW_PORT, timeout=1.0):
         # Quick check with ib_insync
         from ib_insync import IB
@@ -614,6 +615,7 @@ def stream_ticks_loop():
     contracts = load_tick_config()
     print(f"Loaded {len(contracts)} contract(s) from config.")
 
+    retry_count = 0
     while is_keepalive_enabled():
         if not ensure_gateway():
             print("Gateway unavailable; will retry in 5s.",
@@ -621,12 +623,14 @@ def stream_ticks_loop():
             time.sleep(5)
             continue
 
+        import random
         from ib_insync import IB, util
         from ibkr_utils import build_ric_contract
 
         ib = IB()
         try:
-            ib.connect("127.0.0.1", IB_GW_PORT, clientId=2,
+            ib.connect("127.0.0.1", IB_GW_PORT,
+                       clientId=random.randint(100, 999),
                        readonly=True, timeout=10)
             print("Connected for streaming.")
 
@@ -680,6 +684,8 @@ def stream_ticks_loop():
                 f"http://127.0.0.1:{QUESTDB_PORT}",
             )
 
+            retry_count = 0  # reset on success
+
             # If duration-based, check keepalive and loop
             if max_duration > 0:
                 print("Duration-based stream completed; rechecking keepalive...")
@@ -694,8 +700,16 @@ def stream_ticks_loop():
             print(f"ERROR in stream: {e}", file=sys.stderr)
             if not is_keepalive_enabled():
                 break
-            print("Will retry in 5s...")
-            time.sleep(5)
+            retry_count += 1
+            if retry_count > 5:
+                print("ERROR: 5 consecutive failures. Cooling down for 5 min...",
+                      file=sys.stderr)
+                time.sleep(300)
+                retry_count = 0
+                continue
+            delay = 5 * (2 ** (retry_count - 1))  # 5s, 10s, 20s, 40s, 80s
+            print(f"Will retry in {delay}s (attempt {retry_count}/5)...")
+            time.sleep(delay)
         finally:
             try:
                 ib.disconnect()
