@@ -1,0 +1,114 @@
+@startuml ibkr_conn_architecture
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+skinparam ArrowFontSize 11
+skinparam packageBorderThickness 1
+
+title **ibkr_conn — Module Architecture**
+8 Python modules · 3 zones · Typed DTOs · Singleton SessionManager
+
+' ══════════════════════════════════════════════════════════════════════
+' Zone: CLI Entry
+' ══════════════════════════════════════════════════════════════════════
+package "CLI Entry" #LightCyan {
+    component "run_service.py\n--\nmain() — dispatch by --mode\nbuild_ibkr_parser()\n_clean_stale_pycache()\n_handle_status()" as run_service #LightCyan
+}
+
+' ══════════════════════════════════════════════════════════════════════
+' Zone: Application Logic
+' ══════════════════════════════════════════════════════════════════════
+package "Application Logic" #LightBlue {
+
+    component "session_manager.py\n--\nSessionManager (Singleton)\nowns IB + QuestDB\n\nget_ib_conn() — 6×5s retry\n  → IBConnectionFatalError\nget_questdb() → QuestDBManager\non_error() — signal death\nstart() / stop() — lifecycle\nget_status() — health\nkeepalive · PID locks" as session_mgr #LightBlue
+
+    component "data_downloader.py\n--\nDataDownloader — uses SessionManager\n\ndownload_bars() — error recovery\nstart_streaming() — PID-locked entry\nstream_ticks() — keepalive loop\n_do_bars_download() — core\n_load_tick_config() — JSON" as data_dl #LightGray
+
+    component "utils.py\n--\nShared utilities (no connections)\n\nbuild_ric_contract()\nresolve_contracts()\nget_contract()\nparse_date_range()\n_month_map()" as utils #LightGray
+
+    component "ibgateway.py\n--\nIBGateway class:\n  start_gateway() — subprocess\n  stop_gateway() — nc + kill\n  ensure_gateway() — auto-restart\n  wait_for_api() — poll\n  generate_config_ini()\n  get_credentials()\n\nModule-level:\n  install_scripts()" as ibgateway #LightBlue
+
+    component "questdb.py\n--\nQuestDBManager — ILP writer\n  send_ilp_batch()\n  write_bars() → futures_hist\n  write_ticks() → futures_tick\n\nStatic health checks\n\nModule-level:\n  start_questdb()\n  stop_questdb()" as questdb #LightBlue
+
+    component "🔐 IB() Guard Rule\n--\nOnly session_manager.py may\nconstruct ib_insync.IB()\nor call ib.connect().\n\ngrep -rn IB() --include='*.py'" as ib_guard #LightPink
+}
+
+' ══════════════════════════════════════════════════════════════════════
+' Zone: External Dependencies
+' ══════════════════════════════════════════════════════════════════════
+package "External Dependencies" #LightYellow {
+    component "IB Gateway (TWS)\n--\nTCP :4002\nPaper/live trading\n\nib_insync library\nIBC controller" as ib_gateway_ext #LightYellow
+
+    database "QuestDB Server\n--\nHTTP :9000 / ILP :9009\n\nfutures_hist table\nfutures_tick table\nQuestDB-Runtime JVM" as questdb_ext #LightGreen
+
+    database "CSV File System\n--\nData directory\n\nbars CSV export\n(--format csv)" as csv_ext #LightGreen
+}
+
+' ══════════════════════════════════════════════════════════════════════
+' Supporting modules (right panel)
+' ══════════════════════════════════════════════════════════════════════
+package "Supporting Types" #Lavender {
+    component "data_record.py\n--\nTyped NamedTuple DTOs\n\nHistBarData\ndate, open, high, low, close\nvolume, bar_count, average\n\nFutureTickData\ntime, bid, ask, last\nbid_size, ask_size, last_size" as data_record #Lavender
+
+    component "logger.py\n--\nStructured logging\n\nconfigure_pipeline_logging()\n  → console (stdout) INFO\n  → rotating file DEBUG\n  (10MB × 3 backups)\n\nget_logger(name)\n\nIdempotent, one-time" as logger #LightGray
+}
+
+' ══════════════════════════════════════════════════════════════════════
+' Runtime Resources
+' ══════════════════════════════════════════════════════════════════════
+package "Runtime Resources" #LightGreen {
+    component "configs/\n--\ndownload_live_tick.json\n.ibkr_keepalive\n.ibkr_stream.pid\n.ibkr_gateway.pid" as configs_dir #LightGreen
+
+    component "scripts/\n--\nIBC shell scripts:\ndisplaybannerandlaunch.sh\nibcstart.sh, commandsend.sh\nstop.sh, version" as scripts_dir #LightGreen
+
+    component "logs/\n--\npipeline.log\npipeline.log.1\npipeline.log.2\npipeline.log.3" as logs_dir #LightGreen
+
+    component "tests/\n--\ntest_*.py files\n(to be implemented)" as tests_dir #LightGreen
+}
+
+' ══════════════════════════════════════════════════════════════════════
+' Dependencies
+' ══════════════════════════════════════════════════════════════════════
+run_service --> session_mgr : dispatches
+run_service --> data_dl : dispatches
+run_service --> logger : configures
+run_service --> data_record : imports DTOs
+
+data_dl --> session_mgr : uses
+data_dl --> utils : contract resolution
+data_dl --> questdb : write_bars/write_ticks
+data_dl --> data_record : HistBarData
+data_dl --> csv_ext : CSV output
+
+session_mgr --> ibgateway : start/stop/ensure
+session_mgr --> questdb : manages
+session_mgr --> ib_gateway_ext : ib.connect()
+
+ibgateway --> ib_gateway_ext : subprocess
+ibgateway --> configs_dir : generates
+ibgateway --> scripts_dir : runs
+
+questdb --> questdb_ext : ILP /write
+
+data_dl --> configs_dir : reads tick config
+
+logger --> data_dl : logs
+logger --> session_mgr : logs
+logger --> ibgateway : logs
+logger --> questdb : logs
+logger --> utils : logs
+logger --> logs_dir : writes
+
+ib_guard --> session_mgr : enforces
+ib_guard --> data_dl : restricts
+
+' ══════════════════════════════════════════════════════════════════════
+' Legend
+' ══════════════════════════════════════════════════════════════════════
+legend bottom
+  <#LightCyan>CLI Entry</#> | <#LightBlue>Application</#> | <#LightGray>Library</#>
+  <#LightYellow>External</#> | <#LightGreen>Storage</#> | <#LightPink>Constraint</#>
+  <#Lavender>DTOs</#>
+  --> solid: Import/Call
+endlegend
+
+@enduml

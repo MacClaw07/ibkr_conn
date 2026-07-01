@@ -9,300 +9,222 @@
     --fg: #172033;
     --muted: #5b6475;
     --line: #64748b;
-    --neutral: #e2e8f0;
-    --input: #bfdbfe;
-    --process: #c7d2fe;
-    --storage: #99f6e4;
-    --external: #fde68a;
-    --risk: #fecaca;
-    --dto: #c4b5fd;
+    --cli: #bfdbfe; --cli-border: #60a5fa;
+    --app: #c7d2fe; --app-border: #818cf8;
+    --lib: #e2e8f0; --lib-border: #94a3b8;
+    --ext: #fde68a; --ext-border: #facc15;
+    --sto: #99f6e4; --sto-border: #2dd4bf;
+    --dto: #c4b5fd; --dto-border: #a78bfa;
+    --risk: #fecaca; --risk-border: #f87171;
+    --res: #d9ead3; --res-border: #86efac;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0f172a;
-      --fg: #e5e7eb;
-      --muted: #a3adbd;
-      --line: #94a3b8;
-      --neutral: #334155;
-      --input: #1d4ed8;
-      --process: #4338ca;
-      --storage: #0f766e;
-      --external: #92400e;
-      --risk: #991b1b;
-      --dto: #5b21b6;
+      --bg: #0f172a; --fg: #e5e7eb; --muted: #a3adbd; --line: #94a3b8;
+      --cli: #1d4ed8; --cli-border: #60a5fa;
+      --app: #4338ca; --app-border: #818cf8;
+      --lib: #334155; --lib-border: #64748b;
+      --ext: #92400e; --ext-border: #facc15;
+      --sto: #0f766e; --sto-border: #2dd4bf;
+      --dto: #5b21b6; --dto-border: #a78bfa;
+      --risk: #991b1b; --risk-border: #f87171;
+      --res: #14532d; --res-border: #86efac;
     }
   }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--fg);
-    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  }
-  main {
-    max-width: 1140px;
-    margin: 32px auto;
-    padding: 0 20px;
-  }
-  svg {
-    width: 100%;
-    height: auto;
-    display: block;
-  }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1240px; margin: 32px auto; padding: 0 20px; }
+  svg { width: 100%; height: auto; display: block; }
   .title    { font-size: 20px; font-weight: 650; fill: var(--fg); }
   .subtitle { font-size: 13px; fill: var(--muted); }
   .label    { font-size: 13px; font-weight: 600; fill: var(--fg); }
   .small    { font-size: 11px; fill: var(--muted); }
   .method   { font-size: 10px; fill: var(--muted); }
-  .node     { stroke: var(--line); stroke-width: 1; rx: 6; ry: 6; }
-  .neutral  { fill: var(--neutral); }
-  .input    { fill: var(--input); }
-  .process  { fill: var(--process); }
-  .storage  { fill: var(--storage); }
-  .external { fill: var(--external); }
-  .risk     { fill: var(--risk); }
-  .dto      { fill: var(--dto); }
+  .node     { stroke-width: 1.5; rx: 6; ry: 6; }
+  .cat-cli  { fill: var(--cli); stroke: var(--cli-border); }
+  .cat-app  { fill: var(--app); stroke: var(--app-border); }
+  .cat-lib  { fill: var(--lib); stroke: var(--lib-border); }
+  .cat-ext  { fill: var(--ext); stroke: var(--ext-border); }
+  .cat-sto  { fill: var(--sto); stroke: var(--sto-border); }
+  .cat-dto  { fill: var(--dto); stroke: var(--dto-border); }
+  .cat-risk { fill: var(--risk); stroke: var(--risk-border); }
+  .cat-res  { fill: var(--res); stroke: var(--res-border); }
   .edge     { stroke: var(--line); stroke-width: 1.5; fill: none; }
   .dashed   { stroke: var(--line); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
-  .zone     { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 6 5; opacity: 0.7; }
+  .zone     { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 6 5; opacity: 0.6; }
+  .zone-label { font-size: 11px; fill: var(--muted); }
 </style>
 <main>
-<svg viewBox="0 0 1100 920" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif">
-  <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 Z" fill="var(--line)"/>
-    </marker>
-    <marker id="arrow-dashed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 Z" fill="var(--line)"/>
-    </marker>
-  </defs>
-
-  <!-- ── Title ── -->
-  <text x="550" y="30" text-anchor="middle" class="title">ibkr_conn — Module Architecture</text>
-  <text x="550" y="48" text-anchor="middle" class="subtitle">8 Python modules · 3 zones · data_record.py typed DTOs · Singleton SessionManager</text>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════════
-       Zone 1: CLI Entry  (Y: 70–200)
-       ═══════════════════════════════════════════════════════════════════════════ -->
-  <rect x="30"  y="70"  width="1040" height="140" class="zone"/>
-  <text x="40" y="87" class="small" fill="var(--line)">CLI Entry</text>
-
-  <!-- run_service.py -->
-  <rect x="50"   y="105" width="220" height="90" class="node input"/>
-  <text x="160"  y="127" text-anchor="middle" class="label">run_service.py</text>
-  <text x="160"  y="143" text-anchor="middle" class="small">CLI entry point</text>
-  <text x="60"   y="161" class="method">main()</text>
-  <text x="60"   y="175" class="method">build_ibkr_parser()</text>
-  <text x="60"   y="189" class="method">_handle_status()</text>
-
-  <!-- ── divider ── -->
-  <text x="550" y="227" text-anchor="middle" class="subtitle">▼ dispatches to</text>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════════
-       Zone 2: Application Logic  (Y: 240–610)
-       ═══════════════════════════════════════════════════════════════════════════ -->
-  <rect x="30"  y="240" width="1040" height="380" class="zone"/>
-  <text x="40" y="257" class="small" fill="var(--line)">Application Logic</text>
-
-  <!-- ── Row 1 (Y: 270) ── -->
-
-  <!-- session_manager.py -->
-  <rect x="50"   y="270" width="250" height="155" class="node process"/>
-  <text x="175"  y="292" text-anchor="middle" class="label">session_manager.py  🔒 Singleton</text>
-  <text x="175"  y="310" text-anchor="middle" class="small">SessionManager — owns IB + QuestDB</text>
-  <text x="60"   y="329" class="method">get_instance()  (Singleton)</text>
-  <text x="60"   y="343" class="method">get_ib_conn()  (6×5s internal retry)</text>
-  <text x="60"   y="357" class="method">get_questdb() → QuestDBManager</text>
-  <text x="60"   y="371" class="method">on_error()  (signal connection death)</text>
-  <text x="60"   y="385" class="method">start_gateway() / stop_gateway()</text>
-  <text x="60"   y="399" class="method">get_status() · keepalive · PID locks</text>
-  <text x="60"   y="413" class="method">→ IBConnectionFatalError (6 fails)</text>
-
-  <!-- data_downloader.py -->
-  <rect x="350" y="270" width="250" height="155" class="node neutral"/>
-  <text x="475"  y="292" text-anchor="middle" class="label">data_downloader.py  📦 Client</text>
-  <text x="475"  y="310" text-anchor="middle" class="small">DataDownloader — uses SessionManager</text>
-  <text x="360"  y="329" class="method">__init__() → SessionManager()</text>
-  <text x="360"  y="343" class="method">download_bars()  (error recovery)</text>
-  <text x="360"  y="357" class="method">start_streaming()</text>
-  <text x="360"  y="371" class="method">stream_ticks()  (keepalive loop)</text>
-  <text x="360"  y="385" class="method">_load_tick_config()</text>
-  <text x="360"  y="399" class="method">_ensure_gateway_ready()</text>
-  <text x="360"  y="413" class="method">→ HistBarData / FutureTickData</text>
-
-  <!-- utils.py -->
-  <rect x="650" y="270" width="200" height="155" class="node neutral"/>
-  <text x="750"  y="292" text-anchor="middle" class="label">utils.py</text>
-  <text x="750"  y="310" text-anchor="middle" class="small">Shared utilities (no connections)</text>
-  <text x="660"  y="329" class="method">build_ric_contract()</text>
-  <text x="660"  y="343" class="method">resolve_contracts()</text>
-  <text x="660"  y="357" class="method">get_contract()</text>
-  <text x="660"  y="371" class="method">parse_date_range()</text>
-  <text x="660"  y="385" class="method">_month_map()</text>
-
-  <!-- ── Row 2 (Y: 460) ── -->
-
-  <!-- ibgateway.py -->
-  <rect x="50"   y="460" width="250" height="140" class="node process"/>
-  <text x="175"  y="482" text-anchor="middle" class="label">ibgateway.py</text>
-  <text x="175"  y="500" text-anchor="middle" class="small">Gateway lifecycle (no ib_insync)</text>
-  <text x="60"   y="519" class="method">start_gateway()</text>
-  <text x="60"   y="533" class="method">stop_gateway()</text>
-  <text x="60"   y="547" class="method">ensure_gateway()  (via SessionManager)</text>
-  <text x="60"   y="561" class="method">wait_for_api()  (via SessionManager)</text>
-  <text x="60"   y="575" class="method">generate_config_ini()</text>
-  <text x="60"   y="589" class="method">gateway_status() · get_credentials()</text>
-
-  <!-- questdb.py -->
-  <rect x="350" y="460" width="250" height="140" class="node process"/>
-  <text x="475"  y="482" text-anchor="middle" class="label">questdb.py</text>
-  <text x="475"  y="500" text-anchor="middle" class="small">QuestDBManager — OO ILP writer</text>
-  <text x="360"  y="519" class="method">QuestDBManager  (class)</text>
-  <text x="360"  y="533" class="method">send_ilp_batch()</text>
-  <text x="360"  y="547" class="method">write_bars()</text>
-  <text x="360"  y="561" class="method">write_ticks()</text>
-  <text x="360"  y="575" class="method">is_port_open() · is_questdb_running()</text>
-  <text x="360"  y="589" class="method">start_questdb() / stop_questdb()</text>
-
-  <!-- ── divider ── -->
-  <text x="550" y="637" text-anchor="middle" class="subtitle">▼ external dependencies</text>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════════
-       Zone 3: External Dependencies  (Y: 650–800)
-       ═══════════════════════════════════════════════════════════════════════════ -->
-  <rect x="30"  y="650" width="1040" height="160" class="zone"/>
-  <text x="40" y="667" class="small" fill="var(--line)">External Dependencies</text>
-
-  <!-- IB Gateway -->
-  <rect x="50"   y="690" width="220" height="90" class="node external"/>
-  <text x="160"  y="715" text-anchor="middle" class="label">IB Gateway (TWS)</text>
-  <text x="160"  y="735" text-anchor="middle" class="small">TCP :4002</text>
-  <text x="60"   y="755" class="method">ib_insync library</text>
-  <text x="60"   y="769" class="method">IBC controller</text>
-
-  <!-- QuestDB Server -->
-  <rect x="340" y="690" width="250" height="90" class="node storage"/>
-  <text x="465"  y="715" text-anchor="middle" class="label">QuestDB Server</text>
-  <text x="465"  y="735" text-anchor="middle" class="small">HTTP :9000 / ILP :9009</text>
-  <text x="350"  y="755" class="method">futures_hist table</text>
-  <text x="350"  y="769" class="method">futures_tick table</text>
-
-  <!-- CSV File System -->
-  <rect x="650" y="690" width="200" height="90" class="node storage"/>
-  <text x="750"  y="715" text-anchor="middle" class="label">CSV File System</text>
-  <text x="750"  y="735" text-anchor="middle" class="small">Data directory</text>
-  <text x="660"  y="755" class="method">bars CSV export</text>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════════
-       Vertical panels (right side): data_record.py + logger.py
-       ═══════════════════════════════════════════════════════════════════════════ -->
-
-  <!-- data_record.py -->
-  <rect x="900" y="105" width="140" height="120" class="node dto" rx="8" ry="8"/>
-  <text x="910" y="125" text-anchor="middle" class="label">data_record.py</text>
-  <text x="910" y="145" text-anchor="middle" class="small">Typed DTOs (NamedTuples)</text>
-  <text x="910" y="163" text-anchor="middle" class="method">HistBarData</text>
-  <text x="910" y="178" text-anchor="middle" class="method">FutureTickData</text>
-  <text x="910" y="195" text-anchor="middle" class="method">(immutable, no deps)</text>
-
-  <!-- logger.py -->
-  <rect x="900" y="250" width="140" height="430" class="node neutral" rx="8" ry="8"/>
-  <text x="910" y="270" text-anchor="middle" class="label">logger.py</text>
-  <text x="910" y="290" text-anchor="middle" class="small">Singleton structured logger + rotation</text>
-  <text x="910" y="460" text-anchor="middle" class="method" transform="rotate(-90,840,460)" style="writing-mode:tb">get_logger() · configure_pipeline_logging()</text>
-
-  <!-- IB() Guard Rule -->
-  <rect x="650" y="460" width="200" height="140" class="node risk"/>
-  <text x="750"  y="485" text-anchor="middle" class="label">🔐 IB() Guard Rule</text>
-  <text x="750"  y="505" text-anchor="middle" class="small">Only session_manager.py</text>
-  <text x="750"  y="520" text-anchor="middle" class="small">may construct ib_insync.IB()</text>
-  <text x="750"  y="540" text-anchor="middle" class="small">or call ib.connect().</text>
-  <text x="750"  y="560" text-anchor="middle" class="small">Enforceable via:</text>
-  <text x="750"  y="580" text-anchor="middle" class="method">grep -rn "IB()" --include="*.py" . | grep -v venv</text>
-
-  <!-- ═══════════════════════════════════════════════════════════════════════════
-       Edges
-       ═══════════════════════════════════════════════════════════════════════════ -->
-
-  <!-- run_service.py → session_manager.py -->
-  <path d="M 160 195 L 160 220 L 175 220 L 175 270" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- run_service.py → data_downloader.py -->
-  <path d="M 270 150 L 330 150 L 330 340 L 350 340" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- run_service.py → data_record.py -->
-  <path d="M 270 130 L 890 130 L 890 160" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- data_downloader.py → session_manager.py -->
-  <path d="M 350 325 L 300 325" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- data_downloader.py → utils.py -->
-  <path d="M 600 340 L 650 340" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- data_downloader.py → data_record.py (DTO imports) -->
-  <path d="M 600 395 L 890 395 L 890 225" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- data_downloader.py → questdb.py -->
-  <path d="M 475 425 L 475 460" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- session_manager.py → ibgateway.py -->
-  <path d="M 175 425 L 175 460" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- session_manager.py → questdb.py -->
-  <path d="M 300 500 L 350 500" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- ibgateway.py → IB Gateway -->
-  <path d="M 175 600 L 175 655 L 160 655 L 160 690" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- ibgateway.py → session_manager.py (ensure_gateway back-ref) -->
-  <path d="M 250 520 L 320 520 L 320 300 L 300 300" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- questdb.py → QuestDB Server -->
-  <path d="M 465 600 L 465 655 L 465 690" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- data_downloader.py → CSV -->
-  <path d="M 600 415 L 630 415 L 630 725 L 650 725" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- session_manager.py → IB Gateway -->
-  <path d="M 45 450 L 20 450 L 20 735 L 50 735" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- run_service.py → logger.py -->
-  <path d="M 270 120 L 890 120" class="edge" marker-end="url(#arrow)"/>
-
-  <!-- logger.py → all modules (dashed) -->
-  <path d="M 900 260 L 890 260 L 890 160 L 270 160" class="dashed" marker-end="url(#arrow-dashed)"/>
-  <path d="M 900 350 L 890 350" class="dashed" marker-end="url(#arrow-dashed)"/>
-  <path d="M 900 420 L 890 420" class="dashed" marker-end="url(#arrow-dashed)"/>
-  <path d="M 900 520 L 890 520" class="dashed" marker-end="url(#arrow-dashed)"/>
-  <path d="M 900 570 L 890 570" class="dashed" marker-end="url(#arrow-dashed)"/>
-
-  <!-- Legend -->
-  <rect x="50"  y="845" width="12" height="12" class="node input" />
-  <text x="66" y="855" class="small">CLI Entry</text>
-
-  <rect x="150" y="845" width="12" height="12" class="node process" />
-  <text x="166" y="855" class="small">Application</text>
-
-  <rect x="270" y="845" width="12" height="12" class="node neutral" />
-  <text x="286" y="855" class="small">Library</text>
-
-  <rect x="370" y="845" width="12" height="12" class="node external" />
-  <text x="386" y="855" class="small">External</text>
-
-  <rect x="470" y="845" width="12" height="12" class="node storage" />
-  <text x="486" y="855" class="small">Storage</text>
-
-  <rect x="570" y="845" width="12" height="12" class="node risk" />
-  <text x="586" y="855" class="small">Constraint</text>
-
-  <rect x="700" y="845" width="12" height="12" class="node dto" />
-  <text x="716" y="855" class="small">DTOs</text>
-
-  <line x1="800" y1="851" x2="830" y2="851" class="edge" />
-  <text x="836" y="855" class="small">Import</text>
-
-  <line x1="900" y1="851" x2="930" y2="851" class="dashed" />
-  <text x="936" y="855" class="small">Logging</text>
-
+<svg viewBox="0 0 1200 1100" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 Z" fill="var(--line)"/></marker></defs>
+  <text x="600" y="30" text-anchor="middle" class="title">ibkr_conn — Module Architecture</text>
+  <text x="600" y="48" text-anchor="middle" class="subtitle">8 Python modules · 3 zones · Typed DTOs · Singleton SessionManager · Runtime resources</text>
+  <rect x="30" y="60" width="1140" height="170" class="zone"/>
+  <text x="40" y="77" class="zone-label">CLI Entry</text>
+  <rect x="40" y="95" width="240" height="120" class="node cat-cli" />
+  <text x="160" y="115" text-anchor="middle" class="label">run_service.py</text>
+  <text x="160" y="131" text-anchor="middle" class="label">CLI entry point</text>
+  <text x="48" y="149" class="method">main() — dispatch by --mode</text>
+  <text x="48" y="162" class="method">build_ibkr_parser() — argparse</text>
+  <text x="48" y="175" class="method">_clean_stale_pycache()</text>
+  <text x="48" y="188" class="method">_handle_status() — health output</text>
+  <text x="48" y="201" class="method">configure_pipeline_logging() — init</text>
+  <rect x="30" y="240" width="1140" height="470" class="zone"/>
+  <text x="40" y="257" class="zone-label">Application Logic</text>
+  <rect x="40" y="275" width="270" height="155" class="node cat-app" />
+  <text x="175" y="295" text-anchor="middle" class="label">session_manager.py  🔒 Singleton</text>
+  <text x="175" y="311" text-anchor="middle" class="label">SessionManager — owns IB + QuestDB</text>
+  <text x="48" y="329" class="method">get_ib_conn()  (6×5s internal retry)</text>
+  <text x="48" y="342" class="method">get_questdb() → QuestDBManager</text>
+  <text x="48" y="355" class="method">on_error()  (signal connection death)</text>
+  <text x="48" y="368" class="method">start() / stop() — gateway lifecycle</text>
+  <text x="48" y="381" class="method">get_status() · keepalive · PID locks</text>
+  <text x="48" y="394" class="method">→ IBConnectionFatalError (6 fails)</text>
+  <rect x="350" y="275" width="270" height="155" class="node cat-lib" />
+  <text x="485" y="295" text-anchor="middle" class="label">data_downloader.py  📦 Client</text>
+  <text x="485" y="311" text-anchor="middle" class="label">DataDownloader — uses SessionManager</text>
+  <text x="358" y="329" class="method">download_bars()  (error recovery loop)</text>
+  <text x="358" y="342" class="method">start_streaming()  (PID-locked entry)</text>
+  <text x="358" y="355" class="method">stream_ticks()  (keepalive loop)</text>
+  <text x="358" y="368" class="method">  → IBConnectionFatalError on abort</text>
+  <text x="358" y="381" class="method">_load_tick_config()  (JSON config)</text>
+  <text x="358" y="394" class="method">_do_bars_download()  (core bars logic)</text>
+  <rect x="660" y="275" width="200" height="155" class="node cat-lib" />
+  <text x="760" y="295" text-anchor="middle" class="label">utils.py</text>
+  <text x="760" y="311" text-anchor="middle" class="label">Shared utilities (no connections)</text>
+  <text x="668" y="329" class="method">build_ric_contract()</text>
+  <text x="668" y="342" class="method">resolve_contracts()</text>
+  <text x="668" y="355" class="method">get_contract()</text>
+  <text x="668" y="368" class="method">parse_date_range()</text>
+  <text x="668" y="381" class="method">_month_map()</text>
+  <rect x="40" y="475" width="270" height="150" class="node cat-app" />
+  <text x="175" y="495" text-anchor="middle" class="label">ibgateway.py</text>
+  <text x="175" y="511" text-anchor="middle" class="label">Gateway lifecycle (no ib_insync)</text>
+  <text x="48" y="529" class="method">IBGateway class:</text>
+  <text x="48" y="542" class="method">  start_gateway() — subprocess</text>
+  <text x="48" y="555" class="method">  stop_gateway() — nc + kill</text>
+  <text x="48" y="568" class="method">  ensure_gateway() — auto-restart</text>
+  <text x="48" y="581" class="method">  wait_for_api() — poll</text>
+  <text x="48" y="594" class="method">  generate_config_ini()</text>
+  <text x="48" y="607" class="method">  get_credentials()</text>
+  <text x="48" y="620" class="method">Module-level: install_scripts()</text>
+  <rect x="350" y="475" width="270" height="150" class="node cat-app" />
+  <text x="485" y="495" text-anchor="middle" class="label">questdb.py</text>
+  <text x="485" y="511" text-anchor="middle" class="label">QuestDBManager — ILP write operations</text>
+  <text x="358" y="529" class="method">QuestDBManager (class):</text>
+  <text x="358" y="542" class="method">  send_ilp_batch() — HTTP POST /write</text>
+  <text x="358" y="555" class="method">  write_bars() → futures_hist table</text>
+  <text x="358" y="568" class="method">  write_ticks() → futures_tick table</text>
+  <text x="358" y="581" class="method">Static: is_port_open(), is_questdb_running(), find_questdb_pid()</text>
+  <text x="358" y="594" class="method">Module-level: start_questdb(), stop_questdb()</text>
+  <rect x="660" y="475" width="240" height="130" class="node cat-risk" />
+  <text x="780" y="495" text-anchor="middle" class="label">🔐 IB() Guard Rule</text>
+  <text x="780" y="511" text-anchor="middle" class="label">Only session_manager.py may</text>
+  <text x="780" y="527" text-anchor="middle" class="label">construct ib_insync.IB()</text>
+  <text x="780" y="543" text-anchor="middle" class="label">or call ib.connect().</text>
+  <text x="668" y="561" class="method">Enforce:</text>
+  <text x="668" y="574" class="method">grep -rn "IB()" --include="*.py" .</text>
+  <text x="668" y="587" class="method">  | grep -v venv | grep -v __pycache__</text>
+  <rect x="30" y="720" width="1140" height="170" class="zone"/>
+  <text x="40" y="737" class="zone-label">External Dependencies</text>
+  <rect x="40" y="750" width="220" height="90" class="node cat-ext" />
+  <text x="150" y="770" text-anchor="middle" class="label">IB Gateway (TWS)</text>
+  <text x="150" y="786" text-anchor="middle" class="label">TCP :4002 — Paper/live</text>
+  <text x="48" y="804" class="method">ib_insync library</text>
+  <text x="48" y="817" class="method">IBC controller</text>
+  <rect x="300" y="750" width="220" height="90" class="node cat-sto" />
+  <text x="410" y="770" text-anchor="middle" class="label">QuestDB Server</text>
+  <text x="410" y="786" text-anchor="middle" class="label">HTTP :9000 / ILP :9009</text>
+  <text x="308" y="804" class="method">futures_hist table</text>
+  <text x="308" y="817" class="method">futures_tick table</text>
+  <rect x="560" y="750" width="180" height="90" class="node cat-sto" />
+  <text x="650" y="770" text-anchor="middle" class="label">CSV File System</text>
+  <text x="650" y="786" text-anchor="middle" class="label">Data directory</text>
+  <text x="568" y="804" class="method">bars CSV export</text>
+  <text x="568" y="817" class="method">(--format csv mode)</text>
+  <rect x="930" y="95" width="200" height="130" class="node cat-dto" />
+  <text x="1030" y="115" text-anchor="middle" class="label">data_record.py</text>
+  <text x="1030" y="131" text-anchor="middle" class="label">Typed DTOs (NamedTuple)</text>
+  <text x="938" y="149" class="method">HistBarData:</text>
+  <text x="938" y="162" class="method">  date, open, high, low, close</text>
+  <text x="938" y="175" class="method">  volume, bar_count, average</text>
+  <text x="938" y="188" class="method">FutureTickData:</text>
+  <text x="938" y="201" class="method">  time, bid, ask, last</text>
+  <text x="938" y="214" class="method">  bid_size, ask_size, last_size</text>
+  <rect x="930" y="250" width="200" height="130" class="node cat-lib" />
+  <text x="1030" y="270" text-anchor="middle" class="label">logger.py</text>
+  <text x="1030" y="286" text-anchor="middle" class="label">Structured logging (Singleton)</text>
+  <text x="938" y="304" class="method">configure_pipeline_logging()</text>
+  <text x="938" y="317" class="method">  → console (stdout) INFO</text>
+  <text x="938" y="330" class="method">  → rotating file DEBUG (10MB×3)</text>
+  <text x="938" y="343" class="method">get_logger(name) — idempotent</text>
+  <rect x="30" y="900" width="1140" height="140" class="zone"/>
+  <text x="40" y="917" class="zone-label">Runtime Resources</text>
+  <rect x="40" y="930" width="220" height="90" class="node cat-res" />
+  <text x="150" y="950" text-anchor="middle" class="label">configs/</text>
+  <text x="150" y="966" text-anchor="middle" class="label">Configuration files</text>
+  <text x="48" y="984" class="method">download_live_tick.json — RIC list</text>
+  <text x="48" y="997" class="method">.ibkr_keepalive — on/off flag</text>
+  <text x="48" y="1010" class="method">.ibkr_stream.pid — PID lock</text>
+  <text x="48" y="1023" class="method">.ibkr_gateway.pid — PID lock</text>
+  <rect x="300" y="930" width="200" height="90" class="node cat-res" />
+  <text x="400" y="950" text-anchor="middle" class="label">scripts/</text>
+  <text x="400" y="966" text-anchor="middle" class="label">IBC shell scripts</text>
+  <text x="308" y="984" class="method">displaybannerandlaunch.sh</text>
+  <text x="308" y="997" class="method">ibcstart.sh, commandsend.sh</text>
+  <text x="308" y="1010" class="method">stop.sh, version</text>
+  <rect x="540" y="930" width="180" height="90" class="node cat-res" />
+  <text x="630" y="950" text-anchor="middle" class="label">logs/</text>
+  <text x="630" y="966" text-anchor="middle" class="label">Rotating log files</text>
+  <text x="548" y="984" class="method">pipeline.log</text>
+  <text x="548" y="997" class="method">pipeline.log.1 / .2 / .3</text>
+  <rect x="760" y="930" width="160" height="90" class="node cat-res" />
+  <text x="840" y="950" text-anchor="middle" class="label">tests/</text>
+  <text x="840" y="966" text-anchor="middle" class="label">Test suite</text>
+  <text x="768" y="984" class="method">test_*.py files</text>
+  <text x="768" y="997" class="method">(in development)</text>
+  <path d="M 160 215 L 160 237 L 175 237 L 175 275" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 280 155 L 320 155 L 320 350 L 350 350" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 280 130 L 920 130 L 920 160" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 280 120 L 920 120" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 350 330 L 310 330" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 620 345 L 660 345" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 485 430 L 485 475" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 620 390 L 920 390 L 920 225" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 620 410 L 650 410 L 650 780 L 560 780" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 485 430 L 485 460 L 150 460 L 150 930" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 175 430 L 175 475" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 310 430 L 310 460 L 485 460 L 485 475" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 40 420 L 20 420 L 20 790 L 40 790" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 175 625 L 175 665 L 150 665 L 150 750" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 310 540 L 330 540 L 330 970 L 260 970" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 310 560 L 380 560 L 380 980 L 400 980" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 485 625 L 485 665 L 410 665 L 410 750" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 930 275 L 920 275 L 920 350" class="dashed" marker-end="url(#arrow)"/>
+  <path d="M 930 290 L 750 290 L 750 430" class="dashed" marker-end="url(#arrow)"/>
+  <path d="M 930 305 L 640 305 L 640 500" class="dashed" marker-end="url(#arrow)"/>
+  <path d="M 930 320 L 900 320 L 900 370 L 620 370" class="dashed" marker-end="url(#arrow)"/>
+  <path d="M 930 335 L 900 335 L 900 395 L 620 395" class="dashed" marker-end="url(#arrow)"/>
+  <path d="M 780 475 L 780 460 L 310 460 L 310 430" class="edge" marker-end="url(#arrow)"/>
+  <path d="M 900 500 L 770 500 L 620 500" class="edge" marker-end="url(#arrow)"/>
+  <rect x="38" y="1070" width="12" height="12" class="node cat-cli" />
+  <text x="54" y="1080" class="small">CLI Entry</text>
+  <rect x="128" y="1070" width="12" height="12" class="node cat-app" />
+  <text x="144" y="1080" class="small">Application</text>
+  <rect x="238" y="1070" width="12" height="12" class="node cat-lib" />
+  <text x="254" y="1080" class="small">Library</text>
+  <rect x="328" y="1070" width="12" height="12" class="node cat-ext" />
+  <text x="344" y="1080" class="small">External</text>
+  <rect x="418" y="1070" width="12" height="12" class="node cat-sto" />
+  <text x="434" y="1080" class="small">Storage</text>
+  <rect x="508" y="1070" width="12" height="12" class="node cat-risk" />
+  <text x="524" y="1080" class="small">Constraint</text>
+  <rect x="618" y="1070" width="12" height="12" class="node cat-dto" />
+  <text x="634" y="1080" class="small">DTOs</text>
+  <rect x="698" y="1070" width="12" height="12" class="node cat-res" />
+  <text x="714" y="1080" class="small">Resources</text>
+  <line x1="810" y1="1076" x2="830" y2="1076" class="edge" />
+  <line x1="840" y1="1076" x2="860" y2="1076" class="dashed" />
+  <text x="866" y="1080" class="small">─ Import/Call  ─ ─ Logging</text>
 </svg>
 </main>
 </html>
