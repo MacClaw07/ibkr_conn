@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-ibkr_utils — Shared utilities for IBKR data tools
+utils — Shared utilities for IBKR data tools
 ==================================================
-Connection, contract resolution, and helpers shared between
-download_bars.py and download_ticks.py.
+Contract building, date parsing, and RIC resolution.
+No IB connection logic — connections are managed by SessionManager.
 """
 
 import os
@@ -11,81 +11,34 @@ import sys
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-from ib_insync import IB, Contract, Future, Stock
+from ib_insync import Contract, Future, Stock
 
-from pipeline_logger import get_logger
+from logger import get_logger
 
 logger = get_logger(__name__)
 
 
 # ── defaults ────────────────────────────────────────────────────────────────
-HOST = "127.0.0.1"
-PORT = 4002
-CLIENT_ID = 100
 BAR_SIZE = "1 min"
 WHAT_TO_SHOW = "TRADES"
 USE_RTH = True
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-# ── keepalive guard ─────────────────────────────────────────────────────────
-
-##
-# Check if .ibkr_keepalive exists and is set to "true".
-#
-# Prints an error and exits if keepalive is not enabled.  Call this
-# before any IB API connection attempt.
-#
-# @param exit_code: Exit code to use if keepalive is disabled.
-def require_keepalive(exit_code: int = 1):
-    keepalive_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ibkr_keepalive")
-    if not os.path.isfile(keepalive_path):
-        logger.error("keepalive is not enabled -- aborting IB API calls")
-        sys.exit(exit_code)
-    try:
-        value = open(keepalive_path).read().strip().lower()
-    except OSError:
-        logger.error("keepalive is not enabled -- aborting IB API calls")
-        sys.exit(exit_code)
-    if value != "true":
-        logger.error("keepalive is not enabled -- aborting IB API calls")
-        sys.exit(exit_code)
-
-
-# ── connection ──────────────────────────────────────────────────────────────
-
-##
-# Connect to IB Gateway/TWS and return the IB instance.
-#
-# Checks keepalive first; prints connection info; exits on failure.
-#
-# @param host: IB Gateway hostname or IP.
-# @param port: IB Gateway API port.
-# @param client_id: Client ID to use for the connection.
-# @return: A connected ib_insync.IB instance.
-def connect_ib(host: str = HOST, port: int = PORT, client_id: int = CLIENT_ID) -> IB:
-    require_keepalive()
-    ib = IB()
-    try:
-        logger.info("Connecting to IB Gateway at %s:%d ...", host, port)
-        ib.connect(host, port, clientId=client_id, readonly=True)
-        logger.info("Connected. Account: %s", ib.managedAccounts())
-        return ib
-    except Exception as e:
-        logger.error("Could not connect to IB Gateway: %s", e)
-        logger.info("Is the Gateway running? Try: ~/.local/bin/ibkr-start.sh")
-        sys.exit(1)
-
-
 # ── date range parsing ──────────────────────────────────────────────────────
 
-##
-# Parse a yyyy-mm-dd:yyyy-mm-dd date range string.
-#
-# @param date_arg: Date range in the format "YYYY-MM-DD:YYYY-MM-DD".
-# @return: A (start_date, end_date) tuple of datetime objects.
-# @raise SystemExit: If the string is malformed or start > end.
 def parse_date_range(date_arg: str) -> Tuple[datetime, datetime]:
+    """Parse a yyyy-mm-dd:yyyy-mm-dd date range string.
+
+    Args:
+        date_arg: Date range in the format "YYYY-MM-DD:YYYY-MM-DD".
+
+    Returns:
+        A (start_date, end_date) tuple of datetime objects.
+
+    Raises:
+        SystemExit: If the string is malformed or start > end.
+    """
     try:
         start_str, end_str = date_arg.split(":")
     except ValueError:
@@ -105,11 +58,8 @@ def parse_date_range(date_arg: str) -> Tuple[datetime, datetime]:
 
 # ── contract builder ─────────────────────────────────────────────────────────
 
-##
-# Return the RIC month-code to month-number mapping.
-#
-# @return: A dict mapping single-letter month codes to two-digit month strings.
 def _month_map() -> dict:
+    """Return the RIC month-code to month-number mapping."""
     return {
         "H": "03", "M": "06", "U": "09", "Z": "12",
         "F": "01", "G": "02", "J": "04", "K": "05",
@@ -117,21 +67,6 @@ def _month_map() -> dict:
     }
 
 
-##
-# Build an ib_insync contract from a RIC-style instrument code.
-#
-# RIC format for futures: root symbol + month code + year digit,
-# e.g. ESU6 = ES Sep 2026.
-#
-# If sec_type is not FUT, creates a Stock contract instead.
-#
-# @param ric: RIC string (e.g. "ESU6").
-# @param exchange: Exchange name (default "CME").
-# @param sec_type: Security type: "FUT" or "STK".
-# @param currency: Currency code (default "USD").
-# @param multiplier: Optional contract multiplier override.
-# @return: An ib_insync.Contract (either Future or Stock).
-# @raise SystemExit: If the RIC is too short or the month code is invalid.
 def build_ric_contract(
     ric: str,
     exchange: str = "CME",
@@ -139,6 +74,26 @@ def build_ric_contract(
     currency: str = "USD",
     multiplier: Optional[str] = None,
 ) -> Contract:
+    """Build an ib_insync contract from a RIC-style instrument code.
+
+    RIC format for futures: root symbol + month code + year digit,
+    e.g. ESU6 = ES Sep 2026.
+
+    If sec_type is not FUT, creates a Stock contract instead.
+
+    Args:
+        ric: RIC string (e.g. "ESU6").
+        exchange: Exchange name (default "CME").
+        sec_type: Security type: "FUT" or "STK".
+        currency: Currency code (default "USD").
+        multiplier: Optional contract multiplier override.
+
+    Returns:
+        An ib_insync.Contract (either Future or Stock).
+
+    Raises:
+        SystemExit: If the RIC is too short or the month code is invalid.
+    """
     if sec_type.upper() == "FUT":
         ric = ric.strip().upper()
         if len(ric) < 3:
@@ -179,19 +134,6 @@ def build_ric_contract(
 
 # ── contract resolution ─────────────────────────────────────────────────────
 
-##
-# Resolve one or more RICs via reqContractDetails.
-#
-# Returns a list of (resolved_contract, ric_label, expiry_date) tuples.
-# RICs that fail to resolve are skipped with a warning.
-#
-# @param ib: Connected ib_insync.IB instance.
-# @param rics: List of RIC strings (e.g. ["ESU6", "NQU6"]).
-# @param exchange: Exchange name forwarded to build_ric_contract.
-# @param sec_type: Security type forwarded to build_ric_contract.
-# @param currency: Currency code forwarded to build_ric_contract.
-# @param multiplier: Optional multiplier forwarded to build_ric_contract.
-# @return: A list of (contract, ric_label, expiry_date) tuples.
 def resolve_contracts(
     ib,
     rics: List[str],
@@ -200,6 +142,22 @@ def resolve_contracts(
     currency: str = "USD",
     multiplier: Optional[str] = None,
 ) -> List[Tuple]:
+    """Resolve one or more RICs via reqContractDetails.
+
+    Returns a list of (resolved_contract, ric_label, expiry_date) tuples.
+    RICs that fail to resolve are skipped with a warning.
+
+    Args:
+        ib: Connected ib_insync.IB instance.
+        rics: List of RIC strings (e.g. ["ESU6", "NQU6"]).
+        exchange: Exchange name forwarded to build_ric_contract.
+        sec_type: Security type forwarded to build_ric_contract.
+        currency: Currency code forwarded to build_ric_contract.
+        multiplier: Optional multiplier forwarded to build_ric_contract.
+
+    Returns:
+        A list of (contract, ric_label, expiry_date) tuples.
+    """
     results: List[Tuple] = []
     for ric in rics:
         contract = build_ric_contract(ric, exchange, sec_type, currency, multiplier)
@@ -230,18 +188,23 @@ def resolve_contracts(
     return results
 
 
-##
-# Build and resolve a contract from CLI args via reqContractDetails.
-#
-# Requires an already-connected IB instance.  Uses the --ric argument
-# (which may be a list or a single string).
-#
-# @param ib: Connected ib_insync.IB instance.
-# @param args: An argparse.Namespace with --ric, --exchange, --sec-type,
-#   --currency, and --multiplier attributes.
-# @return: A tuple of (resolved_contract, ric_label, expiry_date).
-# @raise SystemExit: If the contract cannot be resolved.
-def get_contract(ib: IB, args) -> Tuple[Contract, str, str]:
+def get_contract(ib, args) -> Tuple[Contract, str, str]:
+    """Build and resolve a single contract from CLI args.
+
+    Requires an already-connected IB instance.  Uses the --ric argument
+    (which may be a list or a single string).
+
+    Args:
+        ib: Connected ib_insync.IB instance.
+        args: An argparse.Namespace with --ric, --exchange, --sec-type,
+            --currency, and --multiplier attributes.
+
+    Returns:
+        A tuple of (resolved_contract, ric_label, expiry_date).
+
+    Raises:
+        SystemExit: If the contract cannot be resolved.
+    """
     ric_val = args.ric if isinstance(args.ric, str) else args.ric[0]
     contract = build_ric_contract(
         ric_val,

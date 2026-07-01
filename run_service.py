@@ -8,10 +8,10 @@ from pathlib import Path
 _venv_python = Path(__file__).resolve().parent / "venv" / "bin" / "python3"
 if _venv_python.exists() and not sys.executable.startswith(str(_venv_python)):
     os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
-"""Single entry point for IBKR data download tools and Gateway lifecycle.
+"""Single CLI entry point for IBKR data tools and Gateway lifecycle.
 
 Modes:
-    bars    — historical bar download (uses download_bars)
+    bars    — historical bar download
     stream  — keepalive-aware tick streaming loop
     status  — show Gateway/QuestDB status
     start   — start Gateway + QuestDB
@@ -27,12 +27,12 @@ Examples:
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
-from pipeline_logger import configure_pipeline_logging, get_logger
+from logger import configure_pipeline_logging, get_logger
 from session_manager import SessionManager
+from data_downloader import DataDownloader
 
 logger = get_logger(__name__)
 
@@ -51,11 +51,8 @@ def _clean_stale_pycache():
             pyc.unlink()
 
 
-##
-# Build the unified argument parser for all ibkr_manager modes.
-#
-# @return: A configured argparse.ArgumentParser.
 def build_ibkr_parser() -> argparse.ArgumentParser:
+    """Build the unified argument parser for all modes."""
     epilog = __doc__
 
     parser = argparse.ArgumentParser(
@@ -64,7 +61,7 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
         epilog=epilog,
     )
 
-    # ── Mode selector ──────────────────────────────────────────────────
+    # ── Mode selector ──
     parser.add_argument(
         "--mode",
         required=True,
@@ -72,7 +69,7 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
         help="Operation mode",
     )
 
-    # ── Instrument selection ───────────────────────────────────────────
+    # ── Instrument selection ──
     parser.add_argument(
         "--ric",
         nargs="+",
@@ -80,13 +77,12 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
         help="One or more RIC codes for futures, e.g. ESU6 NQU6 CLU6",
     )
 
-    # --ric overrides
     parser.add_argument("--exchange", default="CME", help="Exchange (default: CME)")
     parser.add_argument("--sec-type", default="FUT", help="Security type: FUT, STK, etc.")
     parser.add_argument("--currency", default="USD", help="Currency (default: USD)")
     parser.add_argument("--multiplier", type=str, default=None, help="Contract multiplier")
 
-    # ── Bars mode options ──────────────────────────────────────────────
+    # ── Bars mode options ──
     parser.add_argument("--date", help="Date range: yyyy-mm-dd:yyyy-mm-dd (bars mode)")
     parser.add_argument("--format", choices=["questdb", "csv"], default="questdb",
                         help="Output format (bars mode, default: questdb)")
@@ -101,7 +97,7 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", "-o", type=str, default=None,
                         help="Output CSV path (bars mode)")
 
-    # ── Stream mode options ────────────────────────────────────────────
+    # ── Stream mode options ──
     parser.add_argument(
         "--duration",
         type=int,
@@ -110,7 +106,7 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
         help="Run for N seconds then disconnect (stream mode, default: 0 = until Ctrl+C)",
     )
 
-    # ── Connection ─────────────────────────────────────────────────────
+    # ── Connection ──
     parser.add_argument("--host", default="127.0.0.1", help="IB Gateway host")
     parser.add_argument("--port", type=int, default=4002, help="IB Gateway port")
     parser.add_argument("--client-id", type=int, default=100, help="Client ID")
@@ -118,38 +114,8 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# ── Mode handler functions ──────────────────────────────────────────────────
-
-##
-# Validate bars-mode arguments and delegate to download_bars.
-#
-# @param args: Parsed argparse.Namespace.
-# @param mgr: SessionManager instance (unused by bars mode).
-# @param parser: argparse.ArgumentParser (for error reporting).
-def _handle_bars(args, mgr, parser):
-    if not args.ric:
-        parser.error("--ric is required for --mode bars")
-    if not args.date:
-        parser.error("--date is required for --mode bars")
-    from download_bars import main_bars
-    main_bars(args)
-
-
-##
-# Dispatch streaming via SessionManager.
-#
-# @param args: Parsed argparse.Namespace.
-# @param mgr: SessionManager instance.
-def _handle_stream(args, mgr):
-    mgr.start_streaming(args)
-
-
-##
-# Print Gateway, QuestDB, and keepalive status to stdout.
-#
-# @param args: Parsed argparse.Namespace (unused).
-# @param mgr: SessionManager instance.
 def _handle_status(args, mgr):
+    """Print Gateway, QuestDB, and keepalive status."""
     s = mgr.get_status()
     logger.info("=" * 40)
     logger.info("IBKR Pipeline Status")
@@ -166,45 +132,30 @@ def _handle_status(args, mgr):
                 "ENABLED" if s["keepalive"] else "DISABLED")
 
 
-##
-# Start the full pipeline via SessionManager.
-#
-# @param args: Parsed argparse.Namespace (unused).
-# @param mgr: SessionManager instance.
-def _handle_start(args, mgr):
-    mgr.start_gateway()
-
-
-##
-# Stop the full pipeline via SessionManager.
-#
-# @param args: Parsed argparse.Namespace (unused).
-# @param mgr: SessionManager instance.
-def _handle_stop(args, mgr):
-    mgr.stop_gateway()
-
-
-# ── Main entry point ────────────────────────────────────────────────────────
-
-##
-# Parse CLI args, create SessionManager, and dispatch to the appropriate mode handler.
 def main():
+    """Parse CLI args and dispatch to the appropriate mode handler."""
     configure_pipeline_logging()
     _clean_stale_pycache()
     parser = build_ibkr_parser()
     args = parser.parse_args()
+
     mgr = SessionManager()
+    downloader = DataDownloader()
 
     if args.mode == "bars":
-        _handle_bars(args, mgr, parser)
+        if not args.ric:
+            parser.error("--ric is required for --mode bars")
+        if not args.date:
+            parser.error("--date is required for --mode bars")
+        downloader.download_bars(args)
     elif args.mode == "stream":
-        _handle_stream(args, mgr)
+        downloader.start_streaming(args)
     elif args.mode == "status":
         _handle_status(args, mgr)
     elif args.mode == "start":
-        _handle_start(args, mgr)
+        mgr.start_gateway()
     elif args.mode == "stop":
-        _handle_stop(args, mgr)
+        mgr.stop_gateway()
 
 
 if __name__ == "__main__":

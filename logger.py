@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-pipeline_logger — unified structured logging for the IBKR pipeline
-====================================================================
+logger — unified structured logging for the IBKR pipeline
+==========================================================
 Every module calls ``get_logger(__name__)`` to get a configured
 ``logging.Logger`` with both console (stdout) and rotating-file
 outputs.  Call once from the entry point to activate.
