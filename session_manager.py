@@ -21,6 +21,7 @@ from pathlib import Path
 
 from ib_insync import IB
 
+from ibgateway import IBGateway
 from logger import get_logger
 from questdb import QuestDBManager, start_questdb, stop_questdb
 
@@ -83,6 +84,7 @@ class SessionManager:
 
         self._ib: IB | None = None
         self._questdb = QuestDBManager()
+        self._gateway = IBGateway()
         self._error_reported = False
 
         self._initialised = True
@@ -199,17 +201,18 @@ class SessionManager:
 
     # ── Gateway lifecycle ─────────────────────────────────────────────────
 
-    def start_gateway(self):
-        from ibgateway import start_gateway as _start_gw, wait_for_api
+    def start(self):
+        """Start QuestDB and IB Gateway.
 
+        Acquires the gateway PID lock, starts QuestDB, and delegates
+        gateway startup to ibgateway.start_gateway().
+        """
         if not self.acquire_pid_lock(self._gateway_pid_file, "Gateway"):
             sys.exit(0)
         try:
             start_questdb()
-            import threading
-            t = threading.Thread(target=_start_gw, daemon=True)
-            t.start()
-            if wait_for_api():
+            self._gateway.start_gateway()
+            if self._gateway.wait_for_api(self):
                 logger.info("Gateway started and API ready.")
                 logger.info("NOTICE: .ibkr_keepalive was NOT set. Set manually to enable streaming:")
                 logger.info("  echo true > configs/.ibkr_keepalive")
@@ -220,11 +223,14 @@ class SessionManager:
             self.release_pid_lock(self._gateway_pid_file)
             raise
 
-    def stop_gateway(self):
-        from ibgateway import stop_gateway as _stop_gw
+    def stop(self):
+        """Stop IB Gateway and QuestDB.
 
+        Clears keepalive, stops the gateway, stops QuestDB, and releases
+        stream and gateway PID locks.
+        """
         self.set_keepalive(False)
-        _stop_gw()
+        self._gateway.stop_gateway()
         stop_questdb()
         self.release_pid_lock(self._stream_pid_file)
         self.release_pid_lock(self._gateway_pid_file)
@@ -232,18 +238,40 @@ class SessionManager:
 
     # ── Status ──────────────────────────────────────────────────────────────
 
+    def session_status(self) -> dict:
+        status = {
+            "questdb": {"running": False, "port": 9000, "pid": None},
+            "gateway": {"running": False, "port": IB_GW_PORT, "pid": None},
+            "keepalive": self.keep_alive(),
+        }
+
+        qpid = QuestDBManager.find_questdb_pid()
+        if qpid:
+            status["questdb"]["running"] = True
+            status["questdb"]["pid"] = qpid
+
+        status["gateway"]["running"] = QuestDBManager.is_port_open("127.0.0.1", IB_GW_PORT, timeout=1.0)
+
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "displaybannerandlaunch"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                status["gateway"]["pid"] = int(result.stdout.strip().split()[0])
+        except Exception:
+            pass
+
+        return status
+
     def get_status(self) -> dict:
-        from ibgateway import gateway_status
-        s = gateway_status()
-        s["keepalive"] = self.keep_alive()
-        return s
+        return self.session_status()
 
     # ── Internal helpers ───────────────────────────────────────────────────
 
     def _ensure_gateway_ready(self) -> bool:
         """Check if Gateway API is reachable; start it if not."""
-        from ibgateway import ensure_gateway
-        return ensure_gateway()
+        return self._gateway.ensure_gateway(self)
 
     def _force_disconnect_ib(self, ib: IB | None):
         """Aggressively close an ib_insync IB connection."""

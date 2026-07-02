@@ -44,8 +44,8 @@ class DataDownloader:
     provides bar download and tick streaming functions.
     """
 
-    def __init__(self):
-        self._mgr = SessionManager()
+    def __init__(self, mgr: SessionManager):
+        self._mgr = mgr
 
     # ── Bar download ─────────────────────────────────────────────────────
 

@@ -4,8 +4,8 @@ skinparam defaultTextAlignment center
 skinparam ArrowFontSize 11
 skinparam packageBorderThickness 1
 
-title **ibkr_conn — Module Architecture**
-8 Python modules · 3 zones · Typed DTOs · Singleton SessionManager
+title **ibkr_conn — OOP Architecture**
+8 Python modules · 3 zones · Typed DTOs · Singleton SessionManager · IBGateway class
 
 ' ══════════════════════════════════════════════════════════════════════
 ' Zone: CLI Entry
@@ -19,13 +19,13 @@ package "CLI Entry" #LightCyan {
 ' ══════════════════════════════════════════════════════════════════════
 package "Application Logic" #LightBlue {
 
-    component "session_manager.py\n--\nSessionManager (Singleton)\nowns IB + QuestDB\n\nget_ib_conn() — 6×5s retry\n  → IBConnectionFatalError\nget_questdb() → QuestDBManager\non_error() — signal death\nstart() / stop() — lifecycle\nget_status() — health\nkeepalive · PID locks" as session_mgr #LightBlue
+    component "session_manager.py\n--\nSessionManager (Singleton)\ncomposes IBGateway (self._gateway)\n\nget_ib_conn() — 6×5s retry\n  → IBConnectionFatalError\nget_questdb() → QuestDBManager\non_error() — signal death\nstart() → gateway.start_gateway()\n         + gateway.wait_for_api(self)\nstop() → gateway.stop_gateway()\nsession_status() — health + keepalive\nget_status() → session_status()\n_ensure_gateway_ready() → gateway.ensure_gateway()\nkeepalive · PID locks" as session_mgr #LightBlue
 
-    component "data_downloader.py\n--\nDataDownloader — uses SessionManager\n\ndownload_bars() — error recovery\nstart_streaming() — PID-locked entry\nstream_ticks() — keepalive loop\n_do_bars_download() — core\n_load_tick_config() — JSON" as data_dl #LightGray
+    component "data_downloader.py\n--\nDataDownloader (Dependency Injection)\nconstructor: __init__(mgr: SessionManager)\n\ndownload_bars() — error recovery\nstart_streaming() — PID-locked entry\nstream_ticks() — keepalive loop\n_do_bars_download() — core\n_load_tick_config() — JSON" as data_dl #LightGray
 
     component "utils.py\n--\nShared utilities (no connections)\n\nbuild_ric_contract()\nresolve_contracts()\nget_contract()\nparse_date_range()\n_month_map()" as utils #LightGray
 
-    component "ibgateway.py\n--\nIBGateway class:\n  start_gateway() — subprocess\n  stop_gateway() — nc + kill\n  ensure_gateway() — auto-restart\n  wait_for_api() — poll\n  generate_config_ini()\n  get_credentials()\n\nModule-level:\n  install_scripts()" as ibgateway #LightBlue
+    component "ibgateway.py\n--\nIBGateway class (encapsulated):\n  __init__() — stores paths/constants\n  get_credentials() — static\n  generate_config_ini(paper) — instance\n  start_gateway() — daemon thread\n  wait_for_api(mgr, timeout) — poll\n  stop_gateway() — socket + Java kill\n  ensure_gateway(mgr, timeout) —\n    probe + auto-restart\n  _send_stop_via_nc() — private\n  _kill_java_processes() — private\n  _probe_gateway_api() — private\n\nModule-level:\n  install_scripts()" as ibgateway #LightBlue
 
     component "questdb.py\n--\nQuestDBManager — ILP writer\n  send_ilp_batch()\n  write_bars() → futures_hist\n  write_ticks() → futures_tick\n\nStatic health checks\n\nModule-level:\n  start_questdb()\n  stop_questdb()" as questdb #LightBlue
 
@@ -68,8 +68,8 @@ package "Runtime Resources" #LightGreen {
 ' ══════════════════════════════════════════════════════════════════════
 ' Dependencies
 ' ══════════════════════════════════════════════════════════════════════
-run_service --> session_mgr : dispatches
-run_service --> data_dl : dispatches
+run_service --> session_mgr : creates & dispatches
+run_service --> data_dl : DataDownloader(mgr) DI
 run_service --> logger : configures
 run_service --> data_record : imports DTOs
 
@@ -79,7 +79,7 @@ data_dl --> questdb : write_bars/write_ticks
 data_dl --> data_record : HistBarData
 data_dl --> csv_ext : CSV output
 
-session_mgr --> ibgateway : start/stop/ensure
+session_mgr --> ibgateway : composes\n  start()→gateway.start_gateway()\n  stop()→gateway.stop_gateway()\n  ensure→gateway.ensure_gateway()
 session_mgr --> questdb : manages
 session_mgr --> ib_gateway_ext : ib.connect()
 

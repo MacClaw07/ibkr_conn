@@ -114,7 +114,7 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _handle_status(args, mgr):
+def _handle_status(args, mgr: SessionManager):
     """Print Gateway, QuestDB, and keepalive status."""
     s = mgr.get_status()
     logger.info("=" * 40)
@@ -140,7 +140,7 @@ def main():
     args = parser.parse_args()
 
     mgr = SessionManager()
-    downloader = DataDownloader()
+    downloader = DataDownloader(mgr)
 
     if args.mode == "bars":
         if not args.ric:
@@ -153,9 +153,9 @@ def main():
     elif args.mode == "status":
         _handle_status(args, mgr)
     elif args.mode == "start":
-        mgr.start_gateway()
+        mgr.start()
     elif args.mode == "stop":
-        mgr.stop_gateway()
+        mgr.stop()
 
 
 if __name__ == "__main__":
