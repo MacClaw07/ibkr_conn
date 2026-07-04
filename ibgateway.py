@@ -22,7 +22,7 @@ import textwrap
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from ib_insync import IB
 from questdb import QuestDBManager
@@ -155,7 +155,7 @@ def generate_config_ini(paper: bool = True) -> Path:
 class IBGateway:
     """Object-oriented lifecycle manager for the IBKR Gateway."""
 
-    def __init__(self):
+    def __init__(self, on_gateway_terminated: Optional[List[Callable[[int], None]]] = None):
         self.project_dir = PROJECT_DIR
         self.configs_dir = CONFIGS_DIR
         self.scripts_dir = SCRIPTS_DIR
@@ -166,6 +166,10 @@ class IBGateway:
         self.tws_path = TWS_PATH
         self.tws_settings_path = TWS_SETTINGS_PATH
         self.java_home_25 = JAVA_HOME_25
+        self.on_gateway_terminated = on_gateway_terminated or []
+
+    def add_gateway_terminated_handler(self, handler: Callable[[int], None]) -> None:
+        self.on_gateway_terminated.append(handler)
 
     @staticmethod
     def get_credentials() -> tuple:
@@ -296,6 +300,11 @@ class IBGateway:
                 proc.wait()
             finally:
                 logger.info("Gateway subprocess terminated.")
+                for handler in self.on_gateway_terminated:
+                    try:
+                        handler(proc.pid)
+                    except Exception:
+                        logger.exception("Error in gateway termination callback")
 
         t = threading.Thread(target=_run_gateway, daemon=True)
         t.start()
@@ -307,25 +316,12 @@ class IBGateway:
 
         while time.time() < deadline:
             attempt += 1
-            try:
-                ib = IB()
-                try:
-                    ib.connect(
-                        "127.0.0.1", IB_GW_PORT,
-                        clientId=secrets.randbelow(900) + 100,
-                        readonly=True,
-                        timeout=10,
-                    )
-                    logger.info("API ready on attempt %d.", attempt)
-                    return True
-                finally:
-                    try:
-                        ib.disconnect()
-                    except Exception:
-                        pass
-            except Exception:
-                logger.debug("API probe failed on attempt %d.", attempt, exc_info=True)
 
+            status = self._probe_gateway_api(timeout=min(5, max(1, timeout // 10)))
+            if status:
+                logger.info("Gateway API is reachable on attempt %d.", attempt)
+                return True
+                        
             if attempt == 1:
                 logger.info("Waiting for API (attempt %d)...", attempt)
             time.sleep(2)
@@ -424,6 +420,7 @@ class IBGateway:
                 except Exception:
                     pass
         except Exception:
+            logger.debug("Gateway API probe failed", exc_info=True)
             return False
 
     def ensure_gateway(self, mgr, timeout: int = 120) -> bool:

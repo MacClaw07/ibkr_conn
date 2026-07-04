@@ -16,6 +16,7 @@ import os
 import secrets
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -84,7 +85,9 @@ class SessionManager:
 
         self._ib: IB | None = None
         self._questdb = QuestDBManager()
-        self._gateway = IBGateway()
+        self._gateway_ready_lock = threading.Lock()
+        self._gateway_ready = False
+        self._gateway = IBGateway(on_gateway_terminated=[self._on_gateway_terminated])
         self._error_reported = False
 
         self._initialised = True
@@ -109,11 +112,9 @@ class SessionManager:
             else:
                 self._ib = None
 
-        # Ensure gateway is running before attempting connection
-        if not self._ensure_gateway_ready():
-            raise IBConnectionFatalError(
-                "Gateway failed to become ready"
-            )
+        if not self._get_gateway_status():
+            if not self._ensure_gateway_ready():
+                raise IBConnectionFatalError("Gateway failed to become ready")
 
         # Establish a new connection (with retries)
         for attempt in range(1, 7):
@@ -152,6 +153,18 @@ class SessionManager:
         logger.warning("Client reported IB connection error")
         self._ib = None
         self._error_reported = True
+
+    def set_gateway_status(self, ready: bool) -> None:
+        with self._gateway_ready_lock:
+            self._gateway_ready = ready
+
+    def _get_gateway_status(self) -> bool:
+        with self._gateway_ready_lock:
+            return self._gateway_ready
+
+    def _on_gateway_terminated(self, pid: int) -> None:
+        logger.warning("Gateway terminated (PID %d); marking gateway as not ready", pid)
+        self.set_gateway_status(False)
 
     # ── Keepalive ──────────────────────────────────────────────────────────
 
@@ -213,6 +226,7 @@ class SessionManager:
             start_questdb()
             self._gateway.start_gateway()
             if self._gateway.wait_for_api(self):
+                self.set_gateway_status(True)
                 logger.info("Gateway started and API ready.")
                 logger.info("NOTICE: .ibkr_keepalive was NOT set. Set manually to enable streaming:")
                 logger.info("  echo true > configs/.ibkr_keepalive")
@@ -231,6 +245,7 @@ class SessionManager:
         """
         self.set_keepalive(False)
         self._gateway.stop_gateway()
+        self.set_gateway_status(False)
         stop_questdb()
         self.release_pid_lock(self._stream_pid_file)
         self.release_pid_lock(self._gateway_pid_file)
@@ -271,7 +286,10 @@ class SessionManager:
 
     def _ensure_gateway_ready(self) -> bool:
         """Check if Gateway API is reachable; start it if not."""
-        return self._gateway.ensure_gateway(self)
+        ready = self._gateway.ensure_gateway(self)
+        if ready:
+            self.set_gateway_status(True)
+        return ready
 
     def _force_disconnect_ib(self, ib: IB | None):
         """Aggressively close an ib_insync IB connection."""
