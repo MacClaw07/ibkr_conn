@@ -7,11 +7,12 @@ No IB connection logic — connections are managed by SessionManager.
 """
 
 import os
+import re
 import sys
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
-from ib_insync import Contract, Future, Stock
+from ib_insync import Contract, Future, FuturesOption, Stock
 
 from logger import get_logger
 
@@ -67,6 +68,65 @@ def _month_map() -> dict:
     }
 
 
+def resolve_option_underlying(option_ric: str) -> str:
+    """Return the underlying futures RIC for a CME-style option RIC.
+
+    Examples:
+        "ESU62000C" -> "ESU6"
+        "ESU6" -> "ESU6"
+    """
+    if not isinstance(option_ric, str):
+        raise TypeError("option_ric must be a string")
+
+    ric = option_ric.strip().upper()
+    if not ric:
+        raise ValueError("option_ric cannot be empty")
+
+    future_match = re.fullmatch(r"([A-Z]+)([A-Z])([0-9])", ric)
+    if future_match:
+        return ric
+
+    # CME RIC format: ESU67500C
+    option_match = re.fullmatch(r"([A-Z]+)([A-Z])([0-9])(\d+)([CP])", ric)
+    if option_match:
+        return f"{option_match.group(1)}{option_match.group(2)}{option_match.group(3)}"
+
+    # IBKR localSymbol format: ESU6 C7500 or ESU6 P7500
+    option_match = re.fullmatch(r"([A-Z]+)([A-Z])([0-9])\s+([CP])(\d+)", ric)
+    if option_match:
+        return f"{option_match.group(1)}{option_match.group(2)}{option_match.group(3)}"
+
+    raise ValueError(f"Unsupported option RIC format: {option_ric}")
+
+
+def _parse_future_ric(ric: str) -> Tuple[str, str]:
+    """Parse a futures-style RIC into the underlying root symbol and expiry."""
+    ric = ric.strip().upper()
+    if len(ric) < 3:
+        raise SystemExit(f"ERROR: RIC too short: '{ric}'")
+
+    month_code = ric[-2]
+    year_digit = ric[-1]
+    root = ric[:-2]
+
+    month_map = _month_map()
+    if month_code not in month_map:
+        raise SystemExit(
+            f"ERROR: unknown month code '{month_code}' in RIC '{ric}'\n"
+            f"       valid codes: H,M,U,Z (quarterly) or F,G,J,K,N,Q,V,X"
+        )
+
+    month_num = month_map[month_code]
+    current_year = datetime.now().year
+    decade_base = (current_year // 10) * 10
+    year_candidate = decade_base + int(year_digit)
+    if year_candidate < current_year - 2:
+        year_candidate += 10
+
+    contract_month_str = f"{year_candidate}{month_num}"
+    return root, contract_month_str
+
+
 def build_ric_contract(
     ric: str,
     exchange: str = "CME",
@@ -94,30 +154,9 @@ def build_ric_contract(
     Raises:
         SystemExit: If the RIC is too short or the month code is invalid.
     """
-    if sec_type.upper() == "FUT":
-        ric = ric.strip().upper()
-        if len(ric) < 3:
-            raise SystemExit(f"ERROR: RIC too short: '{ric}'")
-
-        month_code = ric[-2]
-        year_digit = ric[-1]
-        root = ric[:-2]
-
-        month_map = _month_map()
-        if month_code not in month_map:
-            raise SystemExit(
-                f"ERROR: unknown month code '{month_code}' in RIC '{ric}'\n"
-                f"       valid codes: H,M,U,Z (quarterly) or F,G,J,K,N,Q,V,X"
-            )
-
-        month_num = month_map[month_code]
-        current_year = datetime.now().year
-        decade_base = (current_year // 10) * 10
-        year_candidate = decade_base + int(year_digit)
-        if year_candidate < current_year - 2:
-            year_candidate += 10
-
-        contract_month_str = f"{year_candidate}{month_num}"
+    sec_type = sec_type.upper()
+    if sec_type == "FUT":
+        root, contract_month_str = _parse_future_ric(ric)
 
         c = Future(
             symbol=root,
@@ -128,49 +167,82 @@ def build_ric_contract(
         if multiplier:
             c.multiplier = multiplier
         return c
-    else:
-        return Stock(symbol=ric, exchange=exchange, currency=currency)
+
+    if sec_type in ("OPT", "FOP"):
+        option_ric = ric.strip().upper()
+        option_match = re.fullmatch(r"([A-Z]+)([A-Z])([0-9])(\d+)([CP])", option_ric)
+        if not option_match:
+            raise SystemExit(f"ERROR: unsupported option RIC format: '{ric}'")
+
+        root, contract_month_str = _parse_future_ric(
+            f"{option_match.group(1)}{option_match.group(2)}{option_match.group(3)}"
+        )
+        c = FuturesOption(
+            symbol=root,
+            lastTradeDateOrContractMonth=contract_month_str,
+            strike=float(option_match.group(4)),
+            right=option_match.group(5),
+            exchange=exchange,
+            currency=currency,
+        )
+        if multiplier:
+            c.multiplier = multiplier
+        return c
+
+    return Stock(symbol=ric, exchange=exchange, currency=currency)
 
 
 # ── contract resolution ─────────────────────────────────────────────────────
 
 def resolve_contracts(
     ib,
-    rics: List[str],
-    exchange: str = "CME",
-    sec_type: str = "FUT",
-    currency: str = "USD",
-    multiplier: Optional[str] = None,
+    contracts: List[dict],
 ) -> List[Tuple]:
-    """Resolve one or more RICs via reqContractDetails.
+    """Resolve one or more contract descriptors via reqContractDetails.
+
+    Each entry in contracts must be a dict containing at least a RIC and the
+    contract parameters needed to build the IB contract.
 
     Returns a list of (resolved_contract, ric_label, expiry_date) tuples.
     RICs that fail to resolve are skipped with a warning.
-
-    Args:
-        ib: Connected ib_insync.IB instance.
-        rics: List of RIC strings (e.g. ["ESU6", "NQU6"]).
-        exchange: Exchange name forwarded to build_ric_contract.
-        sec_type: Security type forwarded to build_ric_contract.
-        currency: Currency code forwarded to build_ric_contract.
-        multiplier: Optional multiplier forwarded to build_ric_contract.
-
-    Returns:
-        A list of (contract, ric_label, expiry_date) tuples.
     """
     results: List[Tuple] = []
-    for ric in rics:
-        contract = build_ric_contract(ric, exchange, sec_type, currency, multiplier)
+    for entry in contracts:
+        if not isinstance(entry, dict):
+            logger.warning("Skipping unsupported contract entry: %s", entry)
+            continue
+
+        ric = entry.get("ric")
+        if not isinstance(ric, str) or not ric.strip():
+            logger.warning("Skipping contract entry without a valid 'ric': %s", entry)
+            continue
+
+        ric = ric.strip()
+        contract_exchange = entry.get("exchange") or entry.get("exch") or "CME"
+        contract_sec_type = entry.get("sec_type") or entry.get("secType") or "FUT"
+        contract_currency = entry.get("currency") or "USD"
+        contract_multiplier = entry.get("multiplier")
+
+        contract = build_ric_contract(
+            ric,
+            contract_exchange,
+            contract_sec_type,
+            contract_currency,
+            contract_multiplier,
+        )
         logger.info("Resolving %s...", ric)
         details = ib.reqContractDetails(contract)
         if not details:
             logger.warning("Could not resolve %s, skipping", ric)
             continue
         cd = details[0]
-        resolved = cd.contract
-        ric_label = resolved.localSymbol if resolved.localSymbol else ric.strip().upper()
+        resolved_contract = cd.contract
+        if contract_sec_type in ("OPT", "FOP"):
+            ric_label = ric.strip().upper()
+        else:
+            ric_label = resolved_contract.localSymbol if resolved_contract.localSymbol else ric.strip().upper()
         expiry_date = ""
-        ltd = getattr(resolved, 'lastTradeDateOrContractMonth', '')
+        ltd = getattr(resolved_contract, 'lastTradeDateOrContractMonth', '')
         if ltd:
             if len(ltd) == 8:
                 expiry_date = f"{ltd[0:4]}-{ltd[4:6]}-{ltd[6:8]}"
@@ -183,7 +255,7 @@ def resolve_contracts(
                     expiry_date = f"{re[0:4]}-{re[4:6]}-{re[6:8]}"
                 else:
                     expiry_date = re
-        results.append((resolved, ric_label, expiry_date))
+        results.append((resolved_contract, ric_label, expiry_date))
         logger.info("  Resolved: %s (expiry: %s)", ric_label, expiry_date)
     return results
 

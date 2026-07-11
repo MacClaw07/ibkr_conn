@@ -112,13 +112,13 @@ class SessionManager:
             else:
                 self._ib = None
 
-        if not self._get_gateway_status():
-            if not self._ensure_gateway_ready():
-                raise IBConnectionFatalError("Gateway failed to become ready")
-
         # Establish a new connection (with retries)
         for attempt in range(1, 7):
             try:
+                if not self._get_gateway_status():
+                    if not self._ensure_gateway_ready():
+                        raise IBConnectionFatalError("Gateway not ready; cannot connect to IB")
+                    
                 cid = secrets.randbelow(900) + 100
                 ib = IB()
                 ib.connect("127.0.0.1", IB_GW_PORT,
@@ -156,6 +156,7 @@ class SessionManager:
 
     def set_gateway_status(self, ready: bool) -> None:
         with self._gateway_ready_lock:
+            logger.info("Setting gateway ready status to %s", ready)
             self._gateway_ready = ready
 
     def _get_gateway_status(self) -> bool:

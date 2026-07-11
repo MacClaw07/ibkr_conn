@@ -122,7 +122,7 @@ def main():
     lines.extend(box(370, 290, 290, 175, "cat-lib",
         ["data_downloader.py  📦 Client", "DataDownloader — uses SessionManager"],
         ["download_bars()  (error recovery loop)", "start_streaming()  (PID-locked entry)",
-         "stream_ticks()  (keepalive loop)", "  → IBConnectionFatalError on abort",
+         "stream_data()  (keepalive loop)", "  → IBConnectionFatalError on abort",
          "_load_tick_config()  (JSON config)",
          "_do_bars_download()  (core bars logic)",
          "Module-level helpers:",

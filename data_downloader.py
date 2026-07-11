@@ -18,12 +18,13 @@ import time
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
-from ib_insync import BarData
+from ib_insync import BarData, IB, Contract, Ticker
 
 from utils import (
     get_contract,
     parse_date_range,
     resolve_contracts,
+    resolve_option_underlying,
     OUTPUT_DIR,
 )
 from data_record import HistBarData
@@ -117,7 +118,7 @@ class DataDownloader:
         ):
             sys.exit(0)
         try:
-            self.stream_ticks()
+            self.stream_data()
         finally:
             self._mgr.release_pid_lock(self._mgr._stream_pid_file)
 
@@ -128,9 +129,9 @@ class DataDownloader:
     #   - calls mgr.on_error()
     #   - calls mgr.get_ib_conn() (retries 6×5s internally)
     #   - if IBConnectionFatalError → abort gracefully
-    def stream_ticks(self):
+    def stream_data(self):
         if not self._mgr.keep_alive():
-            logger.info("Keepalive is disabled; stream_ticks exiting.")
+            logger.info("Keepalive is disabled; stream_data exiting.")
             sys.exit(0)
 
         contracts = self._load_tick_config()
@@ -147,19 +148,18 @@ class DataDownloader:
             qdb = self._mgr.get_questdb()
 
             try:
-                rics = [c["ric"] for c in contracts]
-                resolved = resolve_contracts(ib, rics)
-                if not resolved:
+                resolved_contracts = resolve_contracts(ib, contracts)
+                if not resolved_contracts:
                     logger.warning("No contracts resolved; sleeping 10s...")
                     time.sleep(10)
                     continue
 
-                resolved_labels = {r[1] for r in resolved}
+                resolved_labels = {r[1] for r in resolved_contracts}
                 durations = [c["duration_seconds"] for c in contracts
                              if c["ric"] in resolved_labels]
                 max_duration = max(durations) if durations else 0
 
-                stream_live_ticks(ib, resolved, max_duration, qdb.send_ilp_batch)
+                stream_live_ticks(ib, resolved_contracts, max_duration, qdb.send_ilp_batch)
 
                 if max_duration > 0:
                     logger.info("Duration-based stream completed; rechecking keepalive...")
@@ -210,10 +210,14 @@ class DataDownloader:
             if not isinstance(c, dict) or "ric" not in c or not isinstance(c["ric"], str) or not c["ric"].strip():
                 logger.error("each contract must have a 'ric' field (contract index %d)", i)
                 sys.exit(1)
-            validated.append({
+            entry = {
                 "ric": c["ric"].strip(),
                 "duration_seconds": c.get("duration_seconds", 0),
-            })
+            }
+            for key in ("exchange", "exch", "sec_type", "secType", "currency", "multiplier"):
+                if key in c:
+                    entry[key] = c[key]
+            validated.append(entry)
 
         return validated
 
@@ -267,7 +271,7 @@ def _fetch_chunk(
 #
 # Returns a deduplicated, sorted list of BarData.
 def _download_bars(
-    ib,
+    ib: IB,
     contract,
     start_date: datetime,
     end_date: datetime,
@@ -357,18 +361,28 @@ def _bars_to_csv(bars: List[BarData], path: str) -> int:
 # Build a QuestDB ILP line from an IB ticker update.
 #
 # Returns None when no valid fields are present.
-def _build_ilp_line(ticker, ric_label: str, expiry_date: str) -> Optional[str]:
-    measurement = "futures_tick"
-
+def _build_ilp_line(contract: Contract, ticker: Ticker, ric_label: str, expiry_date: str) -> Optional[str]:    
     if ticker.time is None:
         return None
-
     # Timestamp in nanoseconds
     ts_ns = int(ticker.time.timestamp() * 1_000_000_000)
 
-    tags = f"ric={ric_label},expiry={expiry_date}"
-    fields = []
+    contract_type = contract.secType.upper()
+    measurement = None
+    tags = None
 
+    if contract_type == "FUT":
+        measurement = "futures_tick"
+        tags = f"ric={ric_label},expiry={expiry_date}"
+    elif contract_type == "FOP":
+        measurement = "options_tick"
+        underlying = resolve_option_underlying(ric_label)
+        tags = f"ric={ric_label},underlying_ric={underlying},expiry={expiry_date},strike={contract.strike},right={contract.right}"
+    else:
+        logger.error("Unsupported contract type '%s' for RIC '%s'; skipping tick.", contract_type, ric_label)
+        return None  # unsupported contract type
+    
+    fields = []
     def _ok(val):
         return val is not None and val == val
 
@@ -392,7 +406,7 @@ def _build_ilp_line(ticker, ric_label: str, expiry_date: str) -> Optional[str]:
 
 
 def stream_live_ticks(
-    ib,
+    ib: IB,
     contracts: List[Tuple],
     duration_secs: int,
     send_batch: Callable[[List[str]], int],
@@ -431,28 +445,28 @@ def stream_live_ticks(
         ticker = ib.reqMktData(contract, '', False, False)
         tickers.append((ticker, contract))
 
-        def make_handler(label, expiry):
-            def on_tick(tick):
+        def make_handler(contract: Contract, label: str, expiry: str):
+            def on_tick(ticker):
                 nonlocal running
                 tick_counts[label] += 1
                 cur = (
-                    _fv(tick.bid),
-                    _fv(tick.ask),
-                    _fv(tick.last),
-                    _fv(tick.bidSize),
-                    _fv(tick.askSize),
-                    _fv(tick.lastSize),
+                    _fv(ticker.bid),
+                    _fv(ticker.ask),
+                    _fv(ticker.last),
+                    _fv(ticker.bidSize),
+                    _fv(ticker.askSize),
+                    _fv(ticker.lastSize),
                 )
                 if cur == _last_fields[label]:
                     dup_counts[label] += 1
                     return
                 _last_fields[label] = cur
-                line = _build_ilp_line(tick, label, expiry)
+                line = _build_ilp_line(contract, ticker, label, expiry)
                 if line:
                     lines_buf.append(line)
             return on_tick
 
-        ticker.updateEvent += make_handler(ric_label, expiry_date)
+        ticker.updateEvent += make_handler(contract, ric_label, expiry_date)
         logger.info("  Subscribed: %s (expiry: %s)", ric_label, expiry_date)
 
     def _signal_handler(signum, frame):

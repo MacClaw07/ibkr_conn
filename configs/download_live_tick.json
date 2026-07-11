@@ -1,7 +1,8 @@
 {
   "_comment": "Live L1 tick streaming config. duration_seconds: 0 = run forever.",
   "contracts": [
-    {"ric": "ESU6", "duration_seconds": 0},
-    {"ric": "NQU6", "duration_seconds": 0}
+    {"ric": "ESU6", "exch": "CME", "sec_type": "FUT", "currency": "USD", "multiplier": 50, "duration_seconds": 0},
+    {"ric": "NQU6", "exch": "CME", "sec_type": "FUT", "currency": "USD", "multiplier": 20, "duration_seconds": 0},
+    {"ric": "ESU67500C", "exch": "CME", "sec_type": "FOP", "currency": "USD", "multiplier": 50, "duration_seconds": 0}
   ]
 }
