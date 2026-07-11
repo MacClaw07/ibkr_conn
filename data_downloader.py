@@ -10,8 +10,6 @@ No direct IB construction, no QuestDB access — all through
 SessionManager.get_instance().
 """
 
-import csv
-import os
 import signal
 import sys
 import time
@@ -19,15 +17,15 @@ from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
 from ib_insync import BarData, IB, Contract, Ticker
-
 from utils import (
+    build_ric_contract,
     get_contract,
     parse_date_range,
     resolve_contracts,
     resolve_option_underlying,
-    OUTPUT_DIR,
+    load_tick_config,
 )
-from data_record import HistBarData
+from data_record import HistBarData, HistBarOptionData
 from logger import get_logger
 from session_manager import SessionManager, IBConnectionFatalError
 
@@ -56,8 +54,25 @@ class DataDownloader:
     # Handles connection errors by calling mgr.on_error() then
     # mgr.get_ib_conn() for automatic retry (6×5s internally).
     #
-    # @param args: An argparse.Namespace with connection and bar-pull args.
-    def download_bars(self, args):
+    # @param date        Date range string "yyyy-mm-dd:yyyy-mm-dd".
+    # @param bar_size    Bar size setting, e.g. "1 min", "1 day".
+    # @param what_to_show  Data type, e.g. "TRADES", "MIDPOINT".
+    # @param use_rth     If True, use regular trading hours only.
+    # @param all_hours   If True, include extended hours (overrides use_rth).
+    # @param ric         RIC label e.g. "ESU6" or "ESU67500C" (overrides tick config).
+    # @param exchange    Exchange name (default "CME").
+    # @param sec_type    Security type: "FUT", "FOP", "STK", etc. (default "FUT").
+    # @param currency    Currency code (default "USD").
+    # @param multiplier  Optional contract multiplier.
+    def download_bars(
+        self, date: str, bar_size: str, what_to_show: str,
+        use_rth: bool, all_hours: bool,
+        ric: str = "",
+        exchange: str = "CME",
+        sec_type: str = "FUT",
+        currency: str = "USD",
+        multiplier: str = None,
+    ):
         while True:
             try:
                 ib = self._mgr.get_ib_conn()
@@ -67,52 +82,97 @@ class DataDownloader:
 
             qdb = self._mgr.get_questdb()
             try:
-                self._do_bars_download(ib, qdb, args)
+                if ric:
+                    # Resolve from CLI args — build contract and resolve directly
+                    contract = build_ric_contract(
+                        ric,
+                        exchange=exchange,
+                        sec_type=sec_type,
+                        currency=currency,
+                        multiplier=multiplier,
+                    )
+                    logger.info("Resolving contract: %s ...", contract)
+                    details = ib.reqContractDetails(contract)
+                    if not details:
+                        logger.error("Could not resolve contract %s", contract)
+                        sys.exit(1)
+                    cd = details[0]
+                    resolved = cd.contract
+                    sec_type_upper = sec_type.upper()
+                    if sec_type_upper in ("OPT", "FOP"):
+                        label = ric.strip().upper()
+                    else:
+                        label = resolved.localSymbol if resolved.localSymbol else ric.strip().upper()
+                    expiry_date = ""
+                    if hasattr(resolved, 'lastTradeDateOrContractMonth') and resolved.lastTradeDateOrContractMonth:
+                        ltd = resolved.lastTradeDateOrContractMonth
+                        if len(ltd) == 8:
+                            expiry_date = f"{ltd[0:4]}-{ltd[4:6]}-{ltd[6:8]}"
+                        elif len(ltd) == 6:
+                            expiry_date = f"{ltd[0:4]}-{ltd[4:6]}-01"
+                    if not expiry_date and hasattr(cd, 'realExpirationDate') and cd.realExpirationDate:
+                        expiry_date = cd.realExpirationDate
+                        if len(expiry_date) == 8:
+                            expiry_date = f"{expiry_date[0:4]}-{expiry_date[4:6]}-{expiry_date[6:8]}"
+                    logger.info("Resolved: %s (%s) Exchange=%s Currency=%s Multiplier=%s Expiry=%s",
+                                resolved.localSymbol, resolved.symbol,
+                                resolved.exchange, resolved.currency,
+                                resolved.multiplier, expiry_date)
+                else:
+                    # Fall back to tick config (existing behavior)
+                    resolved, label, expiry_date = get_contract(ib)
+                    
+                sec_type = resolved.secType.upper() if hasattr(resolved, 'secType') else 'FUT'
+                start_date, end_date = parse_date_range(date)
+                use_rth = False if all_hours else use_rth
+
+                all_bars = _download_bars_in_chunks(
+                    ib, resolved,
+                    start_date, end_date,
+                    bar_size, what_to_show, use_rth,
+                )
+
+                if not all_bars:
+                    logger.warning("No data returned. Possible reasons:")
+                    logger.info("  - No other TWS/Gateway session can be active (error 162)")
+                    logger.info("  - Paper accounts get delayed data only")
+                    logger.info("  - Markets may be closed (check trading hours)")
+
+                if sec_type == 'FOP':
+                    try:
+                        underlying_ric = resolve_option_underlying(label)
+                    except (ValueError, TypeError) as e:
+                        logger.warning("Cannot resolve underlying RIC from '%s': %s. Using fallback.", label, e)
+                        # Fallback: parse from the resolved contract's underlying fields
+                        underlying = getattr(resolved, 'underlying', None)
+                        underlying_ric = underlying.localSymbol if (underlying and hasattr(underlying, 'localSymbol')) else label.split()[0] if ' ' in label else label
+                    option_type = getattr(resolved, 'right', '').upper()
+                    strike = float(getattr(resolved, 'strike', 0.0))
+                    hist_bars = [_to_hist_option_bar(b, underlying_ric, option_type, strike) for b in all_bars]
+                    written = qdb.write_bars(
+                        hist_bars, label, expiry_date,
+                        sec_type='FOP',
+                        underlying_ric=underlying_ric,
+                        option_type=option_type,
+                        strike=strike,
+                    )
+                    logger.info("\nDone. %d rows written to QuestDB (options_hist)", written)
+                else:
+                    hist_bars = [_to_hist_bar(b) for b in all_bars]
+                    written = qdb.write_bars(hist_bars, label, expiry_date)
+                    logger.info("\nDone. %d rows written to QuestDB (futures_hist)", written)
+
                 return  # success — done
             except Exception as e:
                 logger.warning("IB connection lost: %s", e)
                 self._mgr.on_error()
                 # loop back to get_ib_conn()
 
-    # Core bar download using the given IB and QuestDB handles.
-    def _do_bars_download(self, ib, qdb, args):
-        resolved, label, expiry_date = get_contract(ib, args)
-        start_date, end_date = parse_date_range(args.date)
-        use_rth = False if args.all_hours else args.use_rth
-
-        all_bars = _download_bars(
-            ib, resolved,
-            start_date, end_date,
-            args.bar_size, args.what_to_show, use_rth,
-        )
-
-        if args.format == "questdb":
-            hist_bars = [_to_hist_bar(b) for b in all_bars]
-            written = qdb.write_bars(hist_bars, label, expiry_date)
-            logger.info("\nDone. %d rows written to QuestDB (futures_hist)", written)
-        else:
-            if args.output:
-                out_path = args.output
-            else:
-                date_tag = f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
-                out_path = os.path.join(OUTPUT_DIR, f"{label}_{date_tag}_{args.bar_size.replace(' ', '')}.csv")
-
-            written = _bars_to_csv(all_bars, out_path)
-            logger.info("\nDone. %d bars saved to %s", written, out_path)
-
-        if not all_bars:
-            logger.warning("No data returned. Possible reasons:")
-            logger.info("  - No other TWS/Gateway session can be active (error 162)")
-            logger.info("  - Paper accounts get delayed data only")
-            logger.info("  - Markets may be closed (check trading hours)")
-
     # ── Tick streaming ───────────────────────────────────────────────────
 
     ##
     # Start streaming; acquires the stream PID lock.
-    #
-    # @param args: Parsed argparse.Namespace (for PID lock acquisition only).
-    def start_streaming(self, args):
+    def start_streaming(self):
         if not self._mgr.acquire_pid_lock(
             self._mgr._stream_pid_file, "Stream"
         ):
@@ -130,11 +190,7 @@ class DataDownloader:
     #   - calls mgr.get_ib_conn() (retries 6×5s internally)
     #   - if IBConnectionFatalError → abort gracefully
     def stream_data(self):
-        if not self._mgr.keep_alive():
-            logger.info("Keepalive is disabled; stream_data exiting.")
-            sys.exit(0)
-
-        contracts = self._load_tick_config()
+        contracts = load_tick_config()
         logger.info("Loaded %d contract(s) from config.", len(contracts))
 
         while self._mgr.keep_alive():
@@ -159,7 +215,7 @@ class DataDownloader:
                              if c["ric"] in resolved_labels]
                 max_duration = max(durations) if durations else 0
 
-                stream_live_ticks(ib, resolved_contracts, max_duration, qdb.send_ilp_batch)
+                _stream_live_ticks(ib, resolved_contracts, max_duration, qdb.send_ilp_batch)
 
                 if max_duration > 0:
                     logger.info("Duration-based stream completed; rechecking keepalive...")
@@ -177,49 +233,6 @@ class DataDownloader:
         if not self._mgr.keep_alive():
             logger.info("Stream exiting: keepalive disabled.")
             sys.exit(0)
-
-    # ── Tick config loading ──────────────────────────────────────────────
-
-    # Load and validate live tick configuration from configs/download_live_tick.json.
-    #
-    # Returns a list of validated contract entries.
-    def _load_tick_config(self) -> list:
-        import json
-
-        config_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "configs", "download_live_tick.json",
-        )
-        if not os.path.isfile(config_path):
-            logger.error("%s not found", config_path)
-            sys.exit(1)
-
-        try:
-            with open(config_path) as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error("%s is not valid JSON: %s", config_path, e)
-            sys.exit(1)
-
-        if "contracts" not in data or not isinstance(data["contracts"], list) or not data["contracts"]:
-            logger.error("%s must contain a non-empty 'contracts' list", config_path)
-            sys.exit(1)
-
-        validated = []
-        for i, c in enumerate(data["contracts"]):
-            if not isinstance(c, dict) or "ric" not in c or not isinstance(c["ric"], str) or not c["ric"].strip():
-                logger.error("each contract must have a 'ric' field (contract index %d)", i)
-                sys.exit(1)
-            entry = {
-                "ric": c["ric"].strip(),
-                "duration_seconds": c.get("duration_seconds", 0),
-            }
-            for key in ("exchange", "exch", "sec_type", "secType", "currency", "multiplier"):
-                if key in c:
-                    entry[key] = c[key]
-            validated.append(entry)
-
-        return validated
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -245,8 +258,8 @@ def _generate_chunks(
 #
 # Returns a list of BarData for the requested end time and duration.
 def _fetch_chunk(
-    ib,
-    contract,
+    ib: IB,
+    contract: Contract,
     end_dt: datetime,
     duration_str: str,
     bar_size: str,
@@ -270,9 +283,9 @@ def _fetch_chunk(
 # Download bars across the date range by fetching multiple historical chunks.
 #
 # Returns a deduplicated, sorted list of BarData.
-def _download_bars(
+def _download_bars_in_chunks(
     ib: IB,
-    contract,
+    contract: Contract,
     start_date: datetime,
     end_date: datetime,
     bar_size: str,
@@ -321,37 +334,32 @@ def _download_bars(
 def _to_hist_bar(b: BarData) -> HistBarData:
     """Convert ib_insync.BarData to our strongly-typed HistBarData."""
     return HistBarData(
-        date=b.date,
-        open=b.open,
-        high=b.high,
-        low=b.low,
-        close=b.close,
-        volume=int(b.volume) if b.volume is not None else None,
-        bar_count=int(b.barCount) if b.barCount is not None else None,
-        average=b.average,
+        date=getattr(b, "date", None),
+        open=getattr(b, "open", None),
+        high=getattr(b, "high", None),
+        low=getattr(b, "low", None),
+        close=getattr(b, "close", None),
+        volume=int(getattr(b, "volume", None)) if getattr(b, "volume", None) is not None else None,
+        bar_count=int(getattr(b, "barCount", None)) if getattr(b, "barCount", None) is not None else None,
+        average=getattr(b, "average", None),
     )
 
 
-# Write a list of BarData rows to a CSV file.
-#
-# Returns the number of bars written.
-def _bars_to_csv(bars: List[BarData], path: str) -> int:
-    with open(path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["datetime", "open", "high", "low", "close", "volume",
-                      "bar_count", "average"])
-        for b in bars:
-            w.writerow([
-                b.date.strftime("%Y-%m-%d %H:%M:%S"),
-                b.open,
-                b.high,
-                b.low,
-                b.close,
-                b.volume,
-                b.barCount,
-                b.average,
-            ])
-    return len(bars)
+def _to_hist_option_bar(b: BarData, underlying_ric: str, option_type: str, strike: float) -> HistBarOptionData:
+    """Convert ib_insync.BarData to our strongly-typed HistBarOptionData."""
+    return HistBarOptionData(
+        date=getattr(b, "date", None),
+        underlying_ric=underlying_ric,
+        type=option_type,
+        strike=strike,
+        open=getattr(b, "open", None),
+        high=getattr(b, "high", None),
+        low=getattr(b, "low", None),
+        close=getattr(b, "close", None),
+        volume=int(getattr(b, "volume", None)) if getattr(b, "volume", None) is not None else None,
+        bar_count=int(getattr(b, "barCount", None)) if getattr(b, "barCount", None) is not None else None,
+        average=getattr(b, "average", None),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -377,7 +385,7 @@ def _build_ilp_line(contract: Contract, ticker: Ticker, ric_label: str, expiry_d
     elif contract_type == "FOP":
         measurement = "options_tick"
         underlying = resolve_option_underlying(ric_label)
-        tags = f"ric={ric_label},underlying_ric={underlying},expiry={expiry_date},strike={contract.strike},right={contract.right}"
+        tags = f"ric={ric_label},underlying_ric={underlying},expiry={expiry_date},type={contract.right}"
     else:
         logger.error("Unsupported contract type '%s' for RIC '%s'; skipping tick.", contract_type, ric_label)
         return None  # unsupported contract type
@@ -398,6 +406,8 @@ def _build_ilp_line(contract: Contract, ticker: Ticker, ric_label: str, expiry_d
         fields.append(f"ask_size={int(ticker.askSize)}i")
     if _ok(ticker.lastSize):
         fields.append(f"last_size={int(ticker.lastSize)}i")
+    if _ok(contract.strike):
+        fields.append(f"strike={contract.strike}")
 
     if not fields:
         return None
@@ -405,69 +415,92 @@ def _build_ilp_line(contract: Contract, ticker: Ticker, ric_label: str, expiry_d
     return f"{measurement},{tags} {','.join(fields)} {ts_ns}"
 
 
-def stream_live_ticks(
-    ib: IB,
-    contracts: List[Tuple],
-    duration_secs: int,
-    send_batch: Callable[[List[str]], int],
-) -> Dict[str, int]:
-    """Stream live L1 tick data from multiple IBKR contracts to QuestDB.
+def _flush_pending_lines(lines_buf: List[str], send_batch: Callable[[List[str]], int], written_counts: Dict[str, int]) -> None:
+    if not lines_buf:
+        return
 
-    Args:
-        ib: Connected ib_insync.IB instance (from SessionManager).
-        contracts: List of (contract, ric_label, expiry_date) tuples.
-        duration_secs: Max seconds to stream (0 = until Ctrl+C).
-        send_batch: Callable that posts ILP lines to QuestDB.
+    send_batch(lines_buf)
+    for line in lines_buf:
+        ric_start = line.find("ric=") + 4
+        ric_end = line.find(",", ric_start)
+        ric = line[ric_start:ric_end]
+        if ric in written_counts:
+            written_counts[ric] += 1
 
-    Returns:
-        A dict mapping ric_label to written row count.
-    """
-    ib.reqMarketDataType(3)  # DELAYED — paper account
+    lines_buf.clear()
 
-    tickers = []
-    tick_counts: Dict[str, int] = {}
-    dup_counts: Dict[str, int] = {}
-    written_counts: Dict[str, int] = {}
-    _last_fields: Dict[str, tuple] = {}
-    lines_buf: List[str] = []
-    running = True
-    last_status_time = time.time()
 
-    def _fv(val):
-        return val if (val is not None and val == val) else None
-
+def _subscribe_contracts(ib: IB, contracts: List[Tuple], state: Dict[str, object]) -> List[Tuple[Ticker, Contract]]:
+    tickers: List[Tuple[Ticker, Contract]] = []
     for contract, ric_label, expiry_date in contracts:
-        tick_counts[ric_label] = 0
-        dup_counts[ric_label] = 0
-        written_counts[ric_label] = 0
-        _last_fields[ric_label] = ()
+        state["tick_counts"][ric_label] = 0
+        state["dup_counts"][ric_label] = 0
+        state["written_counts"][ric_label] = 0
+        state["last_fields"][ric_label] = ()
 
         ticker = ib.reqMktData(contract, '', False, False)
         tickers.append((ticker, contract))
 
         def make_handler(contract: Contract, label: str, expiry: str):
             def on_tick(ticker):
-                nonlocal running
-                tick_counts[label] += 1
+                state["tick_counts"][label] += 1
                 cur = (
-                    _fv(ticker.bid),
-                    _fv(ticker.ask),
-                    _fv(ticker.last),
-                    _fv(ticker.bidSize),
-                    _fv(ticker.askSize),
-                    _fv(ticker.lastSize),
+                    ticker.bid if (ticker.bid is not None and ticker.bid == ticker.bid) else None,
+                    ticker.ask if (ticker.ask is not None and ticker.ask == ticker.ask) else None,
+                    ticker.last if (ticker.last is not None and ticker.last == ticker.last) else None,
+                    ticker.bidSize if (ticker.bidSize is not None and ticker.bidSize == ticker.bidSize) else None,
+                    ticker.askSize if (ticker.askSize is not None and ticker.askSize == ticker.askSize) else None,
+                    ticker.lastSize if (ticker.lastSize is not None and ticker.lastSize == ticker.lastSize) else None,
                 )
-                if cur == _last_fields[label]:
-                    dup_counts[label] += 1
+                if cur == state["last_fields"][label]:
+                    state["dup_counts"][label] += 1
                     return
-                _last_fields[label] = cur
+                state["last_fields"][label] = cur
                 line = _build_ilp_line(contract, ticker, label, expiry)
                 if line:
-                    lines_buf.append(line)
+                    state["lines_buf"].append(line)
             return on_tick
 
         ticker.updateEvent += make_handler(contract, ric_label, expiry_date)
         logger.info("  Subscribed: %s (expiry: %s)", ric_label, expiry_date)
+
+    return tickers
+
+
+def _log_stream_status(start_time: float, state: Dict[str, object], last_status_time: float) -> float:
+    now = time.time()
+    if now - last_status_time < 30.0:
+        return last_status_time
+
+    elapsed = int(now - start_time)
+    total_ticks = sum(state["tick_counts"].values())
+    total_written = sum(state["written_counts"].values())
+    total_dupes = sum(state["dup_counts"].values())
+    per = " ".join(f"{r}:{state['tick_counts'][r]}" for r in sorted(state["tick_counts"]))
+    logger.info("[%ds] ticks: %d (%s) | written: %d | dupes: %d",
+                elapsed, total_ticks, per, total_written, total_dupes)
+    return now
+
+
+def _stream_live_ticks(
+    ib: IB,
+    contracts: List[Tuple],
+    duration_secs: int,
+    send_batch: Callable[[List[str]], int],
+) -> Dict[str, int]:
+    """Stream live L1 tick data from multiple IBKR contracts to QuestDB."""
+    ib.reqMarketDataType(3)  # DELAYED — paper account
+
+    state: Dict[str, object] = {
+        "tick_counts": {},
+        "dup_counts": {},
+        "written_counts": {},
+        "last_fields": {},
+        "lines_buf": [],
+    }
+    tickers = _subscribe_contracts(ib, contracts, state)
+    running = True
+    last_status_time = time.time()
 
     def _signal_handler(signum, frame):
         nonlocal running
@@ -492,28 +525,11 @@ def stream_live_ticks(
                 break
 
             elapsed_since_flush = now - last_flush
-            if len(lines_buf) >= 100 or elapsed_since_flush >= 1.0:
-                if lines_buf:
-                    send_batch(lines_buf)
-                    for line in lines_buf:
-                        ric_start = line.find("ric=") + 4
-                        ric_end = line.find(",", ric_start)
-                        ric = line[ric_start:ric_end]
-                        if ric in written_counts:
-                            written_counts[ric] += 1
-                    lines_buf.clear()
+            if len(state["lines_buf"]) >= 100 or elapsed_since_flush >= 1.0:
+                _flush_pending_lines(state["lines_buf"], send_batch, state["written_counts"])
                 last_flush = now
 
-            if now - last_status_time >= 30.0:
-                elapsed = int(now - start_time)
-                total_ticks = sum(tick_counts.values())
-                total_written = sum(written_counts.values())
-                total_dupes = sum(dup_counts.values())
-                per = " ".join(f"{r}:{tick_counts[r]}" for r in sorted(tick_counts))
-                logger.info("[%ds] ticks: %d (%s) | written: %d | dupes: %d",
-                            elapsed, total_ticks, per, total_written, total_dupes)
-                last_status_time = now
-
+            last_status_time = _log_stream_status(start_time, state, last_status_time)
             ib.sleep(0.05)
 
     finally:
@@ -525,24 +541,17 @@ def stream_live_ticks(
             except Exception:
                 pass
 
-        if lines_buf:
-            send_batch(lines_buf)
-            for line in lines_buf:
-                ric_start = line.find("ric=") + 4
-                ric_end = line.find(",", ric_start)
-                ric = line[ric_start:ric_end]
-                if ric in written_counts:
-                    written_counts[ric] += 1
+        _flush_pending_lines(state["lines_buf"], send_batch, state["written_counts"])
 
         elapsed = int(time.time() - start_time)
-        total_ticks = sum(tick_counts.values())
-        total_written = sum(written_counts.values())
-        total_dupes = sum(dup_counts.values())
+        total_ticks = sum(state["tick_counts"].values())
+        total_written = sum(state["written_counts"].values())
+        total_dupes = sum(state["dup_counts"].values())
         logger.info("\nStreaming complete after %ds.", elapsed)
         logger.info("Total ticks: %d | written: %d | dupes skipped: %d",
                      total_ticks, total_written, total_dupes)
-        for ric in sorted(tick_counts):
+        for ric in sorted(state["tick_counts"]):
             logger.info("  %s: %d ticks, %d dupes, %d written",
-                        ric, tick_counts[ric], dup_counts[ric], written_counts[ric])
+                        ric, state["tick_counts"][ric], state["dup_counts"][ric], state["written_counts"][ric])
 
-    return written_counts
+    return state["written_counts"]

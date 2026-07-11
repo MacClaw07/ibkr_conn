@@ -80,38 +80,38 @@ def main():
     lines = []
     lines.append(CSS)
     lines.append('<main>')
-    lines.append('<svg viewBox="0 0 1200 1180" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif">')
+    lines.append('<svg viewBox="0 0 1200 1200" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif">')
     lines.append('<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 Z" fill="var(--line)"/></marker></defs>')
 
     # Title
     lines.append('  <text x="600" y="30" text-anchor="middle" class="title">ibkr_conn — Module Architecture</text>')
-    lines.append('  <text x="600" y="48" text-anchor="middle" class="subtitle">Updated: July 2026 · 8 Python modules · 3 zones · Typed DTOs · Singleton SessionManager · Runtime resources</text>')
+    lines.append('  <text x="600" y="48" text-anchor="middle" class="subtitle">Updated: July 2026 · 8 Python modules · 3 zones · Typed DTOs · Singleton SessionManager · FOP support · Runtime resources</text>')
 
     # ═══════════════════════════════════════════════════════════
-    # ZONE 1: CLI Entry (Y: 60–240)
+    # ZONE 1: CLI Entry (Y: 60–200)
     # ═══════════════════════════════════════════════════════════
-    lines.append('  <rect x="30" y="60" width="1140" height="190" class="zone"/>')
+    lines.append('  <rect x="30" y="60" width="1140" height="150" class="zone"/>')
     lines.append('  <text x="40" y="77" class="zone-label">CLI Entry</text>')
 
-    lines.extend(box(40, 95, 280, 140, "cat-cli",
+    lines.extend(box(40, 80, 280, 110, "cat-cli",
         ["run_service.py", "CLI entry point"],
         ["Auto-reinvoke with project venv (os.execv)", "main() — dispatch by --mode",
          "build_ibkr_parser() — argparse", "_clean_stale_pycache()",
-         "_handle_status() — health output", "configure_pipeline_logging() — init"]))
+         "_handle_status() — health output"]))
 
     # ═══════════════════════════════════════════════════════════
-    # ZONE 2: Application Logic (Y: 270–720)
+    # ZONE 2: Application Logic (Y: 220–730)
     # ═══════════════════════════════════════════════════════════
-    lines.append('  <rect x="30" y="260" width="1140" height="470" class="zone"/>')
-    lines.append('  <text x="40" y="277" class="zone-label">Application Logic</text>')
+    lines.append('  <rect x="30" y="220" width="1140" height="520" class="zone"/>')
+    lines.append('  <text x="40" y="237" class="zone-label">Application Logic</text>')
 
-    # ── Row 1 (Y: 290) ──
+    # ── Row 1 (Y: 250) ──
     # session_manager.py — left
-    lines.extend(box(40, 290, 290, 175, "cat-app",
+    lines.extend(box(40, 250, 290, 190, "cat-app",
         ["session_manager.py  🔒 Singleton", "SessionManager — owns IB + QuestDB"],
         ["get_ib_conn()  (6×5s internal retry)", "get_questdb() → QuestDBManager",
-         "on_error()  (signal connection death)", "start() / stop() — gateway lifecycle",
-         "get_status() · keepalive · set_keepalive()",
+         "on_error()  (signal connection death)", "start() / stop() — gateway + QuestDB lifecycle",
+         "get_status() · keep_alive() · set_keepalive()",
          "acquire_pid_lock() / release_pid_lock()",
          "_ensure_gateway_ready() · set_gateway_status()",
          "_get_gateway_status() · _force_disconnect_ib()",
@@ -119,200 +119,197 @@ def main():
          "→ IBConnectionFatalError (6 fails)"]))
 
     # data_downloader.py — center
-    lines.extend(box(370, 290, 290, 175, "cat-lib",
+    lines.extend(box(370, 250, 290, 190, "cat-lib",
         ["data_downloader.py  📦 Client", "DataDownloader — uses SessionManager"],
-        ["download_bars()  (error recovery loop)", "start_streaming()  (PID-locked entry)",
-         "stream_data()  (keepalive loop)", "  → IBConnectionFatalError on abort",
-         "_load_tick_config()  (JSON config)",
-         "_do_bars_download()  (core bars logic)",
+        ["__init__(mgr: SessionManager) — DI", "download_bars() — error recovery + ILP write",
+         "  supports FUT + FOP (options) hist bars",
+         "start_streaming() — PID-locked entry",
+         "stream_data() — keepalive loop + reconnect",
          "Module-level helpers:",
          "  _generate_chunks() · _fetch_chunk()",
-         "  _download_bars() · _to_hist_bar() · _bars_to_csv()",
-         "  _build_ilp_line() — ILP formatter",
-         "  stream_live_ticks(ib, ..., send_batch=...)"]))
+         "  _download_bars() — multi-chunk + dedup",
+         "  _to_hist_bar() → HistBarData",
+         "  _to_hist_option_bar() → HistBarOptionData",
+         "  _build_ilp_line() — ticker → ILP line",
+         "  _stream_live_ticks() · _subscribe_contracts()",
+         "  _flush_pending_lines() · _log_stream_status()"]))
 
     # utils.py — right
-    lines.extend(box(700, 290, 200, 175, "cat-lib",
+    lines.extend(box(700, 250, 200, 190, "cat-lib",
         ["utils.py", "Shared utilities (no connections)"],
-        ["build_ric_contract()", "resolve_contracts()",
-         "get_contract()", "parse_date_range()",
-         "_month_map()"]))
+        ["build_ric_contract() → Future/FutOpt/Stock",
+         "resolve_contracts() — multi from dict",
+         "get_contract() — single from CLI args",
+         "parse_date_range()", "load_tick_config() — JSON validation",
+         "_month_map()", "resolve_option_underlying()"]))
 
-    # ── Row 2 (Y: 500) ──
+    # ── Row 2 (Y: 475) ──
     # ibgateway.py
-    lines.extend(box(40, 500, 290, 180, "cat-app",
-        ["ibgateway.py", "Gateway lifecycle (no ib_insync)"],
+    lines.extend(box(40, 475, 290, 210, "cat-app",
+        ["ibgateway.py", "Gateway lifecycle (encapsulated)"],
         ["IBGateway class:", "  __init__(on_gateway_terminated=[])",
-         "  generate_config_ini(self) — instance method",
-         "  get_credentials() — static method",
+         "  get_credentials() — static", "  generate_config_ini(paper) — instance",
          "  add_gateway_terminated_handler()",
-         "  start_gateway() — subprocess start",
-         "  stop_gateway() — nc + kill",
-         "  ensure_gateway(mgr) — auto-restart",
-         "  wait_for_api(mgr) — poll",
+         "  start_gateway() — daemon subprocess",
+         "  stop_gateway() — socket STOP + Java kill",
+         "  ensure_gateway(mgr, timeout) — auto-restart",
+         "  wait_for_api(mgr, timeout) — poll loop",
+         "  _send_stop_via_nc() — private",
+         "  _kill_java_processes() — private",
+         "  _probe_gateway_api() — temp IB() probe",
+         "    (never exports IB instance)",
          "Module-level:", "  get_credentials() · generate_config_ini()",
          "  install_scripts()"]))
 
     # questdb.py
-    lines.extend(box(370, 500, 290, 180, "cat-app",
-        ["questdb.py", "QuestDBManager — ILP write operations"],
-        ["QuestDBManager:", "  __init__(host, port=9000)",
-         "  url property → REST base URL",
-         "  send_ilp_batch() → int (count written)",
-         "  write_bars() → futures_hist table",
-         "  write_ticks() → futures_tick table",
-         "  Static: is_port_open(), is_questdb_running()",
+    lines.extend(box(370, 475, 290, 210, "cat-app",
+        ["questdb.py", "QuestDBManager — ILP writer (no IB dep)"],
+        ["QuestDBManager:", "  __init__(host, port=9000)", "  url property → REST base URL",
+         "  send_ilp_batch(lines) → int (count written)",
+         "  write_bars() → futures_hist / options_hist",
+         "    supports FUT + FOP sec types",
+         "  write_ticks() → futures_tick",
+         "  Static: is_port_open(host, port)",
+         "  Static: is_questdb_running()",
          "  Static: find_questdb_pid()",
-         "  Static: _ok(val) — NaN check",
-         "  Static: _format_ilp_timestamp(dt) → nanosec",
+         "  Static: _ok(val) — NaN guard",
+         "  Static: _format_ilp_timestamp(dt) → ns",
          "Module-level:", "  start_questdb() · stop_questdb()",
          "  (called by SessionManager)"]))
 
     # IB() Guard Rule
-    lines.extend(box(700, 515, 240, 130, "cat-risk",
+    lines.extend(box(700, 490, 240, 120, "cat-risk",
         ["🔐 IB() Guard Rule",
          "Only session_manager.py may",
          "construct ib_insync.IB()",
          "or call ib.connect()."],
-        ["Enforce:", 'grep -rn "IB()" --include="*.py" .',
-         "  | grep -v venv | grep -v __pycache__",
-         "(ibgateway.py probes use temp IB",
-         " but never export it)"]))
+        ["ibgateway._probe_gateway_api() uses temp IB()",
+         "for availability probing only —",
+         "never exports or stores the instance."]))
 
     # ═══════════════════════════════════════════════════════════
-    # ZONE 3: External Dependencies (Y: 750–900)
+    # ZONE 3: External Dependencies (Y: 760–890)
     # ═══════════════════════════════════════════════════════════
-    lines.append('  <rect x="30" y="740" width="1140" height="170" class="zone"/>')
-    lines.append('  <text x="40" y="757" class="zone-label">External Dependencies</text>')
+    lines.append('  <rect x="30" y="750" width="1140" height="150" class="zone"/>')
+    lines.append('  <text x="40" y="767" class="zone-label">External Dependencies</text>')
 
     # IB Gateway
-    lines.extend(box(40, 770, 220, 90, "cat-ext",
+    lines.extend(box(40, 780, 220, 85, "cat-ext",
         ["IB Gateway (TWS)", "TCP :4002 — Paper/live"],
         ["ib_insync library", "IBC controller"]))
 
     # QuestDB Server
-    lines.extend(box(300, 770, 220, 90, "cat-sto",
-        ["QuestDB Server", "HTTP :9000 / ILP :9009"],
-        ["futures_hist table", "futures_tick table"]))
-
-    # CSV File System
-    lines.extend(box(560, 770, 180, 90, "cat-sto",
-        ["CSV File System", "Data directory"],
-        ["bars CSV export", "(--format csv mode)"]))
+    lines.extend(box(300, 780, 230, 85, "cat-sto",
+        ["QuestDB Server", "HTTP :9000"],
+        ["futures_hist · options_hist", "futures_tick · options_tick"]))
 
     # ═══════════════════════════════════════════════════════════
     # Right panel: Supporting Types
     # ═══════════════════════════════════════════════════════════
     # data_record.py
-    lines.extend(box(930, 95, 220, 140, "cat-dto",
+    lines.extend(box(930, 80, 220, 160, "cat-dto",
         ["data_record.py", "Typed DTOs (NamedTuple)"],
         ["HistBarData:", "  date, open, high, low, close",
+         "  volume, bar_count, average",
+         "HistBarOptionData:", "  date, underlying_ric, type, strike",
+         "  open, high, low, close",
          "  volume, bar_count, average",
          "FutureTickData:", "  time, bid, ask, last",
          "  bid_size, ask_size, last_size"]))
 
     # logger.py
-    lines.extend(box(930, 265, 220, 140, "cat-lib",
+    lines.extend(box(930, 270, 220, 120, "cat-lib",
         ["logger.py", "Structured logging (Singleton)"],
         ["configure_pipeline_logging()", "  → console (stdout) INFO",
          "  → rotating file DEBUG (10MB×3)",
          "get_logger(name) — idempotent"]))
 
-    # stream_live_ticks() module-level function callout
-    lines.extend(box(930, 450, 220, 125, "cat-lib",
-        ["stream_live_ticks()", "Module-level (data_downloader.py)"],
-        ["ib, contracts, duration_secs, send_batch",
-         "→ Dict[str, int] (written per ric)",
-         "Uses _build_ilp_line() helper",
-         "Calls send_batch (qdb.send_ilp_batch)"]))
-
     # ═══════════════════════════════════════════════════════════
     # Bottom panel: Runtime Resources
     # ═══════════════════════════════════════════════════════════
-    lines.append('  <rect x="30" y="920" width="1140" height="140" class="zone"/>')
-    lines.append('  <text x="40" y="937" class="zone-label">Runtime Resources</text>')
+    lines.append('  <rect x="30" y="910" width="1140" height="140" class="zone"/>')
+    lines.append('  <text x="40" y="927" class="zone-label">Runtime Resources</text>')
 
-    lines.extend(box(40, 950, 220, 90, "cat-res",
+    lines.extend(box(40, 940, 220, 90, "cat-res",
         ["configs/", "Configuration files"],
         ["download_live_tick.json — RIC list", ".ibkr_keepalive — on/off flag",
          ".ibkr_stream.pid — PID lock", ".ibkr_gateway.pid — PID lock"]))
 
-    lines.extend(box(300, 950, 200, 90, "cat-res",
+    lines.extend(box(300, 940, 200, 90, "cat-res",
         ["scripts/", "IBC shell scripts"],
         ["displaybannerandlaunch.sh", "ibcstart.sh, commandsend.sh",
          "stop.sh, version"]))
 
-    lines.extend(box(540, 950, 180, 90, "cat-res",
+    lines.extend(box(540, 940, 180, 90, "cat-res",
         ["logs/", "Rotating log files"],
         ["pipeline.log", "pipeline.log.1 / .2 / .3"]))
 
-    lines.extend(box(760, 950, 160, 90, "cat-res",
+    lines.extend(box(760, 940, 160, 90, "cat-res",
         ["tests/", "Test suite"],
-        ["test_*.py files", "(in development)"]))
+        ["test_data_downloader.py", "test_ibgateway_readiness.py",
+         "test_resolve_contracts.py"]))
 
     # ═══════════════════════════════════════════════════════════
     # Edges
     # ═══════════════════════════════════════════════════════════
     # run_service → session_mgr
-    lines.append('  <path d="M 180 235 L 180 260 L 185 260 L 185 290" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 180 190 L 180 220 L 185 220 L 185 250" class="edge" marker-end="url(#arrow)"/>')
     # run_service → data_dl
-    lines.append('  <path d="M 320 160 L 350 160 L 350 370 L 370 370" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 320 135 L 350 135 L 350 345 L 370 345" class="edge" marker-end="url(#arrow)"/>')
     # run_service → data_record (DTOs)
-    lines.append('  <path d="M 320 140 L 920 140 L 920 165" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 320 120 L 920 120 L 920 160" class="edge" marker-end="url(#arrow)"/>')
     # run_service → logger
-    lines.append('  <path d="M 320 125 L 920 125" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 320 105 L 920 105 L 920 270" class="edge" marker-end="url(#arrow)"/>')
 
     # data_dl → session_mgr
-    lines.append('  <path d="M 370 340 L 330 340" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 370 315 L 330 315" class="edge" marker-end="url(#arrow)"/>')
     # data_dl → utils
-    lines.append('  <path d="M 660 360 L 700 360" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 660 325 L 700 325" class="edge" marker-end="url(#arrow)"/>')
     # data_dl → questdb
-    lines.append('  <path d="M 515 465 L 515 500" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 515 440 L 515 475" class="edge" marker-end="url(#arrow)"/>')
     # data_dl → data_record
-    lines.append('  <path d="M 660 425 L 920 425 L 920 235" class="edge" marker-end="url(#arrow)"/>')
-    # data_dl → CSV
-    lines.append('  <path d="M 660 440 L 680 440 L 680 800 L 560 800" class="edge" marker-end="url(#arrow)"/>')
-    # data_dl → configs
-    lines.append('  <path d="M 515 465 L 515 480 L 150 480 L 150 950" class="edge" marker-end="url(#arrow)"/>')
-    # data_dl → stream_live_ticks() (module-level)
-    lines.append('  <path d="M 660 490 L 920 490 L 920 450" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 660 370 L 920 370 L 920 240" class="edge" marker-end="url(#arrow)"/>')
+    # data_dl → configs (reads download_live_tick.json)
+    lines.append('  <path d="M 515 440 L 515 455 L 150 455 L 150 940" class="edge" marker-end="url(#arrow)"/>')
 
     # session_mgr → ibgateway (lifecycle delegation)
-    lines.append('  <path d="M 185 465 L 185 500" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 185 440 L 185 475" class="edge" marker-end="url(#arrow)"/>')
     # session_mgr → questdb
-    lines.append('  <path d="M 330 460 L 330 480 L 515 480 L 515 500" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 330 440 L 330 580 L 515 580 L 515 475" class="edge" marker-end="url(#arrow)"/>')
     # session_mgr → IB Gateway
-    lines.append('  <path d="M 40 430 L 20 430 L 20 810 L 40 810" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 40 360 L 20 360 L 20 820 L 40 820" class="edge" marker-end="url(#arrow)"/>')
     # session_mgr → ibgateway (gateway termination callback flow — dashed)
-    lines.append('  <path d="M 60 465 L 60 490 L 85 490 L 85 500" class="dashed" marker-end="url(#arrow)"/>')
-    lines.append('  <text x="50" y="498" class="small" fill="var(--muted)">termination cb</text>')
+    lines.append('  <path d="M 60 440 L 60 465 L 85 465 L 85 475" class="dashed" marker-end="url(#arrow)"/>')
+    lines.append('  <text x="50" y="473" class="small" fill="var(--muted)">termination cb</text>')
 
     # ibgateway → IB Gateway
-    lines.append('  <path d="M 185 680 L 185 710 L 150 710 L 150 770" class="edge" marker-end="url(#arrow)"/>')
-    # ibgateway → configs
-    lines.append('  <path d="M 330 575 L 350 575 L 350 990 L 260 990" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 185 685 L 185 720 L 150 720 L 150 780" class="edge" marker-end="url(#arrow)"/>')
+    # ibgateway → configs (generates config.ini)
+    lines.append('  <path d="M 185 685 L 185 695 L 150 695 L 150 940" class="edge" marker-end="url(#arrow)"/>')
     # ibgateway → scripts
-    lines.append('  <path d="M 330 595 L 390 595 L 390 1000 L 400 1000" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 330 580 L 390 580 L 390 985 L 400 985" class="edge" marker-end="url(#arrow)"/>')
 
     # questdb → QuestDB Server
-    lines.append('  <path d="M 515 680 L 515 710 L 410 710 L 410 770" class="edge" marker-end="url(#arrow)"/>')
-
-    # stream_live_ticks → QuestDB Server (send_batch ILP path)
-    lines.append('  <path d="M 930 575 L 920 575 L 920 700 L 520 700 L 520 770" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 515 685 L 515 710 L 415 710 L 415 780" class="edge" marker-end="url(#arrow)"/>')
 
     # logger → various (dashed)
-    lines.append('  <path d="M 930 290 L 910 290 L 910 370" class="dashed" marker-end="url(#arrow)"/>')
-    lines.append('  <path d="M 930 310 L 750 310 L 750 465" class="dashed" marker-end="url(#arrow)"/>')
-    lines.append('  <path d="M 930 325 L 660 325 L 660 530" class="dashed" marker-end="url(#arrow)"/>')
-    lines.append('  <path d="M 930 340 L 880 340 L 880 400 L 660 400" class="dashed" marker-end="url(#arrow)"/>')
-    lines.append('  <path d="M 930 355 L 880 355 L 880 420 L 660 420" class="dashed" marker-end="url(#arrow)"/>')
+    # logger → data_dl
+    lines.append('  <path d="M 930 330 L 660 330 L 660 370" class="dashed" marker-end="url(#arrow)"/>')
+    # logger → session_mgr
+    lines.append('  <path d="M 930 310 L 750 310 L 750 410" class="dashed" marker-end="url(#arrow)"/>')
+    # logger → ibgateway
+    lines.append('  <path d="M 930 350 L 800 350 L 800 540" class="dashed" marker-end="url(#arrow)"/>')
+    # logger → questdb
+    lines.append('  <path d="M 930 370 L 800 370 L 800 560" class="dashed" marker-end="url(#arrow)"/>')
+    # logger → utils
+    lines.append('  <path d="M 930 355 L 880 355 L 880 410 L 900 410" class="dashed" marker-end="url(#arrow)"/>')
 
     # IB Guard → session_mgr / data_dl
-    lines.append('  <path d="M 820 515 L 820 490 L 330 490 L 330 465" class="edge" marker-end="url(#arrow)"/>')
-    lines.append('  <path d="M 940 525 L 800 525 L 660 525" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 820 490 L 820 465 L 330 465 L 330 440" class="edge" marker-end="url(#arrow)"/>')
+    lines.append('  <path d="M 940 530 L 660 530 L 660 440" class="edge" marker-end="url(#arrow)"/>')
 
     # Legend
-    legend_y = 1130
+    legend_y = 1150
     legend_items = [
         (10, "CLI Entry", "cat-cli"),
         (100, "Application", "cat-app"),
@@ -322,8 +319,8 @@ def main():
         (480, "Constraint", "cat-risk"),
         (590, "DTOs", "cat-dto"),
         (670, "Resources", "cat-res"),
-        (790, "─ Import/Call  ─ ─ Logging", None),
-        (970, "┅ Callback/Del.", None),
+        (790, "─ Import/Call    ─ ─ Logging", None),
+        (990, "┅ Callback/Del.", None),
     ]
     for lx, ltxt, cls in legend_items:
         if cls:
@@ -344,6 +341,7 @@ def main():
     out_path = HERE / "ibkr_conn_uml.html"
     out_path.write_text('\n'.join(lines) + '\n')
     print(f"Written: {out_path}")
+
 
 if __name__ == "__main__":
     main()

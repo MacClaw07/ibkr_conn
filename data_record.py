@@ -33,6 +33,26 @@ class HistBarData(NamedTuple):
 #  * Fields correspond to ib_insync ticker fields and the futures_tick
 #  * QuestDB table schema.
 #  */
+# /**
+#  * A single historical bar row for an option contract — for QuestDB ILP write.
+#  *
+#  * Fields correspond to ib_insync.BarData combined with option-specific
+#  * metadata (underlying_ric, type, strike) matching the options_hist table.
+#  */
+class HistBarOptionData(NamedTuple):
+    date: datetime
+    underlying_ric: str
+    type: str  # "C" or "P"
+    strike: float
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: Optional[int] = None
+    bar_count: Optional[int] = None
+    average: Optional[float] = None
+
+
 class FutureTickData(NamedTuple):
     time: datetime
     bid: Optional[float] = None

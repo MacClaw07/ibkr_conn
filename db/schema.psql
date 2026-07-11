@@ -1,0 +1,81 @@
+-- ============================================================================
+-- IBKR Connector — QuestDB Schema (PostgreSQL wire-protocol variant)
+-- ============================================================================
+-- This variant uses QuestDB's PostgreSQL-compatible syntax and can be
+-- executed via psql:
+--   PGPASSWORD=*** psql -h localhost -p 8812 -U admin -d qdb -f schema.psql
+--
+-- Tables:
+--   futures_hist    — Historical OHLCV bar data
+--   futures_tick    — Real-time L1 tick data for futures
+--   options_tick    — Real-time L1 tick data for options on futures (FOP)
+--   options_hist    — Historical OHLCV bar data for options on futures (FOP)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- futures_hist
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS futures_hist (
+    datetime  TIMESTAMP,
+    ric       SYMBOL,
+    expiry    SYMBOL,
+    open      DOUBLE,
+    high      DOUBLE,
+    low       DOUBLE,
+    close     DOUBLE,
+    volume    LONG,
+    bar_count INT,
+    average   DOUBLE
+) TIMESTAMP(datetime) PARTITION BY DAY;
+
+-- ----------------------------------------------------------------------------
+-- futures_tick
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS futures_tick (
+    datetime  TIMESTAMP,
+    ric       SYMBOL,
+    expiry    SYMBOL,
+    bid       DOUBLE,
+    ask       DOUBLE,
+    last      DOUBLE,
+    bid_size  LONG,
+    ask_size  LONG,
+    last_size LONG
+) TIMESTAMP(datetime) PARTITION BY DAY;
+
+-- ----------------------------------------------------------------------------
+-- options_tick
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS options_tick (
+    datetime       TIMESTAMP,
+    ric            SYMBOL,
+    underlying_ric SYMBOL,
+    expiry         SYMBOL,
+    type           SYMBOL,
+    strike         DOUBLE,
+    bid            DOUBLE,
+    ask            DOUBLE,
+    last           DOUBLE,
+    bid_size       LONG,
+    ask_size       LONG,
+    last_size      LONG
+) TIMESTAMP(datetime) PARTITION BY DAY;
+
+-- ----------------------------------------------------------------------------
+-- options_hist
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS options_hist (
+    datetime       TIMESTAMP,
+    ric            SYMBOL,
+    underlying_ric SYMBOL,
+    expiry         SYMBOL,
+    type           SYMBOL,
+    strike         DOUBLE,
+    open           DOUBLE,
+    high           DOUBLE,
+    low            DOUBLE,
+    close          DOUBLE,
+    volume         LONG,
+    bar_count      INT,
+    average        DOUBLE
+) TIMESTAMP(datetime) PARTITION BY DAY;

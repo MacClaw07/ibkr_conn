@@ -82,17 +82,17 @@ def resolve_option_underlying(option_ric: str) -> str:
     if not ric:
         raise ValueError("option_ric cannot be empty")
 
-    future_match = re.fullmatch(r"([A-Z]+)([A-Z])([0-9])", ric)
+    future_match = re.fullmatch(r"([A-Z0-9]+)([A-Z])([0-9])", ric)
     if future_match:
         return ric
 
-    # CME RIC format: ESU67500C
-    option_match = re.fullmatch(r"([A-Z]+)([A-Z])([0-9])(\d+)([CP])", ric)
+    # CME RIC format: ESU67500C or EW3U67500C
+    option_match = re.fullmatch(r"([A-Z0-9]+)([A-Z])([0-9])(\d+)([CP])", ric)
     if option_match:
         return f"{option_match.group(1)}{option_match.group(2)}{option_match.group(3)}"
 
-    # IBKR localSymbol format: ESU6 C7500 or ESU6 P7500
-    option_match = re.fullmatch(r"([A-Z]+)([A-Z])([0-9])\s+([CP])(\d+)", ric)
+    # IBKR localSymbol format: ESU6 C7500 or EW3U6 C7500 (root may contain digits)
+    option_match = re.fullmatch(r"([A-Z0-9]+)([A-Z])([0-9])\s+([CP])(\d+)", ric)
     if option_match:
         return f"{option_match.group(1)}{option_match.group(2)}{option_match.group(3)}"
 
@@ -260,30 +260,41 @@ def resolve_contracts(
     return results
 
 
-def get_contract(ib, args) -> Tuple[Contract, str, str]:
-    """Build and resolve a single contract from CLI args.
+def get_contract(ib) -> Tuple[Contract, str, str]:
+    """Build and resolve a single contract from tick config.
 
-    Requires an already-connected IB instance.  Uses the --ric argument
-    (which may be a list or a single string).
+    Loads the first contract from configs/download_live_tick.json
+    and resolves it using the provided IB instance.
 
     Args:
         ib: Connected ib_insync.IB instance.
-        args: An argparse.Namespace with --ric, --exchange, --sec-type,
-            --currency, and --multiplier attributes.
 
     Returns:
         A tuple of (resolved_contract, ric_label, expiry_date).
 
     Raises:
-        SystemExit: If the contract cannot be resolved.
+        SystemExit: If the contract cannot be loaded or resolved.
     """
-    ric_val = args.ric if isinstance(args.ric, str) else args.ric[0]
+    contracts = load_tick_config()
+    if not contracts:
+        logger.error("No contracts found in config")
+        sys.exit(1)
+
+    cfg = contracts[0]
+    ric_val = cfg["ric"]
+    
+    # Map config keys to build_ric_contract parameter names
+    exchange = cfg.get("exchange") or cfg.get("exch")
+    sec_type = cfg.get("sec_type") or cfg.get("secType")
+    currency = cfg.get("currency")
+    multiplier = cfg.get("multiplier")
+    
     contract = build_ric_contract(
         ric_val,
-        exchange=args.exchange,
-        sec_type=args.sec_type,
-        currency=args.currency,
-        multiplier=args.multiplier,
+        exchange=exchange,
+        sec_type=sec_type,
+        currency=currency,
+        multiplier=multiplier,
     )
 
     logger.info("Resolving contract: %s ...", contract)
@@ -314,3 +325,47 @@ def get_contract(ib, args) -> Tuple[Contract, str, str]:
                 resolved.exchange, resolved.currency,
                 resolved.multiplier, expiry_date)
     return resolved, ric_label, expiry_date
+
+
+def load_tick_config() -> list:
+    """Load and validate live tick configuration from configs/download_live_tick.json.
+
+    Returns a list of validated contract entries.
+    Exits the process with an error message on failure (mirrors previous behavior).
+    """
+    import json
+
+    config_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "configs", "download_live_tick.json",
+    )
+    if not os.path.isfile(config_path):
+        logger.error("%s not found", config_path)
+        sys.exit(1)
+
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error("%s is not valid JSON: %s", config_path, e)
+        sys.exit(1)
+
+    if "contracts" not in data or not isinstance(data["contracts"], list) or not data["contracts"]:
+        logger.error("%s must contain a non-empty 'contracts' list", config_path)
+        sys.exit(1)
+
+    validated = []
+    for i, c in enumerate(data["contracts"]):
+        if not isinstance(c, dict) or "ric" not in c or not isinstance(c["ric"], str) or not c["ric"].strip():
+            logger.error("each contract must have a 'ric' field (contract index %d)", i)
+            sys.exit(1)
+        entry = {
+            "ric": c["ric"].strip(),
+            "duration_seconds": c.get("duration_seconds", 0),
+        }
+        for key in ("exchange", "exch", "sec_type", "secType", "currency", "multiplier"):
+            if key in c:
+                entry[key] = c[key]
+        validated.append(entry)
+
+    return validated

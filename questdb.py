@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from data_record import HistBarData, FutureTickData
+from data_record import HistBarData, HistBarOptionData, FutureTickData
 from logger import get_logger
 
 logger = get_logger(__name__)
@@ -114,24 +114,46 @@ class QuestDBManager:
     # ── Bar writer ─────────────────────────────────────────────────────────
 
     ##
-    # Write historical bar data to QuestDB futures_hist table via ILP.
+    # Write historical bar data to QuestDB via ILP.
     #
-    # @param bars: List of HistBarData NamedTuples.
+    # @param bars: List of HistBarData or HistBarOptionData NamedTuples.
     # @param ric_label: RIC label e.g. 'ESU6'.
     # @param expiry_date: Expiry date as YYYY-MM-DD.
+    # @param sec_type: Security type: "FUT" → futures_hist, "FOP" → options_hist.
+    # @param underlying_ric: Underlying futures RIC for FOP contracts.
+    # @param option_type: "C" or "P" for FOP contracts.
+    # @param strike: Strike price for FOP contracts.
     # @param batch_size: Rows per ILP batch.
     # @return: Number of rows written.
     def write_bars(
         self,
-        bars: List[HistBarData],
+        bars: List,
         ric_label: str,
         expiry_date: str,
+        sec_type: str = "FUT",
+        underlying_ric: str = "",
+        option_type: str = "",
+        strike: float = 0.0,
         batch_size: int = 1000,
     ) -> int:
         if not bars:
             return 0
 
-        measurement = "futures_hist"
+        sec_type = sec_type.upper()
+        # Escape spaces in tag values (ILP requires \ before spaces in tags)
+        ric_escaped = ric_label.replace(" ", "\\ ")
+        if sec_type == "FOP":
+            measurement = "options_hist"
+            tag_part = (
+                f"{measurement},ric={ric_escaped}"
+                f",underlying_ric={underlying_ric}"
+                f",expiry={expiry_date}"
+                f",type={option_type}"
+            )
+        else:
+            measurement = "futures_hist"
+            tag_part = f"{measurement},ric={ric_escaped},expiry={expiry_date}"
+
         lines = []
 
         for b in bars:
@@ -151,11 +173,13 @@ class QuestDBManager:
                 fields.append(f"bar_count={int(b.bar_count)}i")
             if self._ok(b.average):
                 fields.append(f"average={b.average}")
+            if sec_type == "FOP" and self._ok(strike):
+                fields.append(f"strike={strike}")
 
             if not fields:
                 continue
 
-            line = f"{measurement},ric={ric_label},expiry={expiry_date} {','.join(fields)} {ts_ns}"
+            line = f"{tag_part} {','.join(fields)} {ts_ns}"
             lines.append(line)
 
         total_written = 0

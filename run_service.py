@@ -36,7 +36,6 @@ from data_downloader import DataDownloader
 
 logger = get_logger(__name__)
 
-
 def _clean_stale_pycache():
     """Remove .pyc files for modules whose .py source no longer exists."""
     cache_dir = Path(__file__).resolve().parent / "__pycache__"
@@ -84,8 +83,6 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
 
     # ── Bars mode options ──
     parser.add_argument("--date", help="Date range: yyyy-mm-dd:yyyy-mm-dd (bars mode)")
-    parser.add_argument("--format", choices=["questdb", "csv"], default="questdb",
-                        help="Output format (bars mode, default: questdb)")
     parser.add_argument("--bar-size", default="1 min",
                         help="Bar size (bars mode, default: 1 min)")
     parser.add_argument("--what-to-show", default="TRADES",
@@ -94,8 +91,6 @@ def build_ibkr_parser() -> argparse.ArgumentParser:
                         help="Regular trading hours only (bars mode)")
     parser.add_argument("--all-hours", action="store_true",
                         help="Include extended hours (bars mode, overrides --use-rth)")
-    parser.add_argument("--output", "-o", type=str, default=None,
-                        help="Output CSV path (bars mode)")
 
     # ── Stream mode options ──
     parser.add_argument(
@@ -147,9 +142,20 @@ def main():
             parser.error("--ric is required for --mode bars")
         if not args.date:
             parser.error("--date is required for --mode bars")
-        downloader.download_bars(args)
+        downloader.download_bars(
+            date=args.date,
+            bar_size=args.bar_size,
+            what_to_show=args.what_to_show,
+            use_rth=args.use_rth,
+            all_hours=args.all_hours,
+            ric=args.ric[0],
+            exchange=args.exchange,
+            sec_type=args.sec_type,
+            currency=args.currency,
+            multiplier=args.multiplier,
+        )
     elif args.mode == "stream":
-        downloader.start_streaming(args)
+        downloader.start_streaming()
     elif args.mode == "status":
         _handle_status(args, mgr)
     elif args.mode == "start":
