@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from ib_insync import IB
+from ib_async import IB
 
 from ibgateway import IBGateway
 from logger import get_logger
@@ -102,7 +102,7 @@ class SessionManager:
     # Up to 6 retries with 5-second sleep intervals are performed
     # internally.
     #
-    # @return: A connected ib_insync.IB instance.
+    # @return: A connected ib_async.IB instance.
     # @raise IBConnectionFatalError: If connection cannot be established
     #     after 6 attempts.
     def get_ib_conn(self) -> IB:
@@ -293,7 +293,7 @@ class SessionManager:
         return ready
 
     def _force_disconnect_ib(self, ib: IB | None):
-        """Aggressively close an ib_insync IB connection."""
+        """Aggressively close an ib_async IB connection."""
         if ib is None:
             return
         try:

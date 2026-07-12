@@ -23,9 +23,10 @@ CREATE TABLE IF NOT EXISTS futures_hist (
     high      DOUBLE,
     low       DOUBLE,
     close     DOUBLE,
-    volume    LONG,
-    bar_count INT,
-    average   DOUBLE
+    volume        LONG,
+    bar_count     INT,
+    average       DOUBLE,
+    insertion_ts  TIMESTAMP  -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;
 
 -- ----------------------------------------------------------------------------
@@ -38,9 +39,10 @@ CREATE TABLE IF NOT EXISTS futures_tick (
     bid       DOUBLE,
     ask       DOUBLE,
     last      DOUBLE,
-    bid_size  LONG,
-    ask_size  LONG,
-    last_size LONG
+    bid_size      LONG,
+    ask_size      LONG,
+    last_size     LONG,
+    insertion_ts  TIMESTAMP  -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;
 
 -- ----------------------------------------------------------------------------
@@ -58,7 +60,8 @@ CREATE TABLE IF NOT EXISTS options_tick (
     last           DOUBLE,
     bid_size       LONG,
     ask_size       LONG,
-    last_size      LONG
+    last_size      LONG,
+    insertion_ts   TIMESTAMP  -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;
 
 -- ----------------------------------------------------------------------------
@@ -77,5 +80,6 @@ CREATE TABLE IF NOT EXISTS options_hist (
     close          DOUBLE,
     volume         LONG,
     bar_count      INT,
-    average        DOUBLE
+    average        DOUBLE,
+    insertion_ts   TIMESTAMP  -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;

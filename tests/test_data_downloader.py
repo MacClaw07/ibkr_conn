@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-if "ib_insync" not in sys.modules:
-    ib_insync = types.ModuleType("ib_insync")
+if "ib_async" not in sys.modules:
+    ib_async = types.ModuleType("ib_async")
 
     class Contract:  # noqa: D401
         pass
@@ -28,14 +28,14 @@ if "ib_insync" not in sys.modules:
     class Ticker:  # noqa: D401
         pass
 
-    ib_insync.Contract = Contract
-    ib_insync.Future = Future
-    ib_insync.FuturesOption = FuturesOption
-    ib_insync.Stock = Stock
-    ib_insync.BarData = BarData
-    ib_insync.IB = IB
-    ib_insync.Ticker = Ticker
-    sys.modules["ib_insync"] = ib_insync
+    ib_async.Contract = Contract
+    ib_async.Future = Future
+    ib_async.FuturesOption = FuturesOption
+    ib_async.Stock = Stock
+    ib_async.BarData = BarData
+    ib_async.IB = IB
+    ib_async.Ticker = Ticker
+    sys.modules["ib_async"] = ib_async
 
 from data_downloader import DataDownloader
 
