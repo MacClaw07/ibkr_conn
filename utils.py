@@ -12,7 +12,7 @@ import sys
 from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
-from ib_insync import Contract, Future, FuturesOption, Stock
+from ib_async import Contract, Future, FuturesOption, Stock
 
 from logger import get_logger
 
@@ -134,7 +134,7 @@ def build_ric_contract(
     currency: str = "USD",
     multiplier: Optional[str] = None,
 ) -> Contract:
-    """Build an ib_insync contract from a RIC-style instrument code.
+    """Build an ib_async contract from a RIC-style instrument code.
 
     RIC format for futures: root symbol + month code + year digit,
     e.g. ESU6 = ES Sep 2026.
@@ -149,7 +149,7 @@ def build_ric_contract(
         multiplier: Optional contract multiplier override.
 
     Returns:
-        An ib_insync.Contract (either Future or Stock).
+        An ib_async.Contract (either Future or Stock).
 
     Raises:
         SystemExit: If the RIC is too short or the month code is invalid.
@@ -267,7 +267,7 @@ def get_contract(ib) -> Tuple[Contract, str, str]:
     and resolves it using the provided IB instance.
 
     Args:
-        ib: Connected ib_insync.IB instance.
+        ib: Connected ib_async.IB instance.
 
     Returns:
         A tuple of (resolved_contract, ric_label, expiry_date).

@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional, Tuple
 
-from ib_insync import BarData, IB, Contract, Ticker
+from ib_async import BarData, IB, Contract, Ticker
 from utils import (
     build_ric_contract,
     get_contract,
@@ -332,7 +332,7 @@ def _download_bars_in_chunks(
 
 
 def _to_hist_bar(b: BarData) -> HistBarData:
-    """Convert ib_insync.BarData to our strongly-typed HistBarData."""
+    """Convert ib_async.BarData to our strongly-typed HistBarData."""
     return HistBarData(
         date=getattr(b, "date", None),
         open=getattr(b, "open", None),
@@ -346,7 +346,7 @@ def _to_hist_bar(b: BarData) -> HistBarData:
 
 
 def _to_hist_option_bar(b: BarData, underlying_ric: str, option_type: str, strike: float) -> HistBarOptionData:
-    """Convert ib_insync.BarData to our strongly-typed HistBarOptionData."""
+    """Convert ib_async.BarData to our strongly-typed HistBarOptionData."""
     return HistBarOptionData(
         date=getattr(b, "date", None),
         underlying_ric=underlying_ric,
@@ -408,6 +408,9 @@ def _build_ilp_line(contract: Contract, ticker: Ticker, ric_label: str, expiry_d
         fields.append(f"last_size={int(ticker.lastSize)}i")
     if _ok(contract.strike):
         fields.append(f"strike={contract.strike}")
+    # insertion_ts: local time of data insertion
+    insertion_ns = int(datetime.now().timestamp() * 1_000_000_000)
+    fields.append(f"insertion_ts={insertion_ns}i")
 
     if not fields:
         return None

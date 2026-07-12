@@ -6,7 +6,7 @@ This directory contains the QuestDB schema definitions for the IBKR data connect
 
 | Table | Type | Written by | Description |
 |-------|------|-----------|-------------|
-| `futures_hist` | OHLCV bars | `questdb.py::write_bars()` | Historical bar data (1-min, 5-min, etc.) from `ib_insync` |
+| `futures_hist` | OHLCV bars | `questdb.py::write_bars()` | Historical bar data (1-min, 5-min, etc.) from `ib_async` |
 | `futures_tick` | L1 ticks | `questdb.py::write_ticks()` / `data_downloader.py` live stream | Real-time L1 ticks for futures contracts |
 | `options_tick` | L1 ticks | `data_downloader.py` live stream | Real-time L1 ticks for options on futures (FOP) |
 

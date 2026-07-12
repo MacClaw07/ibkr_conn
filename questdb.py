@@ -6,7 +6,7 @@ QuestDBManager provides ILP write operations for the active QuestDB
 connection.  Lifecycle functions (start/stop) are module-level and
 called by SessionManager.
 
-QuestDBManager has no ib_insync dependency — all data is passed as
+QuestDBManager has no ib_async dependency — all data is passed as
 plain dicts, lists, or datetimes.
 """
 
@@ -43,7 +43,7 @@ class QuestDBManager:
     """Live QuestDB connection handle.
 
     Owned by SessionManager.  Provides ILP batch writes for both
-    historical bar data and live tick data.  No ib_insync dependency.
+    historical bar data and live tick data.  No ib_async dependency.
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9000):
@@ -175,6 +175,9 @@ class QuestDBManager:
                 fields.append(f"average={b.average}")
             if sec_type == "FOP" and self._ok(strike):
                 fields.append(f"strike={strike}")
+            # insertion_ts: local time of data insertion
+            insertion_ns = self._format_ilp_timestamp(datetime.now())
+            fields.append(f"insertion_ts={insertion_ns}i")
 
             if not fields:
                 continue
@@ -226,6 +229,9 @@ class QuestDBManager:
                 fields.append(f"ask_size={int(t.ask_size)}i")
             if t.last_size is not None:
                 fields.append(f"last_size={int(t.last_size)}i")
+            # insertion_ts: local time of data insertion
+            insertion_ns = self._format_ilp_timestamp(datetime.now())
+            fields.append(f"insertion_ts={insertion_ns}i")
 
             if not fields:
                 continue

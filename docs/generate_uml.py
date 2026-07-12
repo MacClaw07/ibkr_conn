@@ -181,7 +181,7 @@ def main():
     lines.extend(box(700, 490, 240, 120, "cat-risk",
         ["🔐 IB() Guard Rule",
          "Only session_manager.py may",
-         "construct ib_insync.IB()",
+         "construct ib_async.IB()",
          "or call ib.connect()."],
         ["ibgateway._probe_gateway_api() uses temp IB()",
          "for availability probing only —",
@@ -196,7 +196,7 @@ def main():
     # IB Gateway
     lines.extend(box(40, 780, 220, 85, "cat-ext",
         ["IB Gateway (TWS)", "TCP :4002 — Paper/live"],
-        ["ib_insync library", "IBC controller"]))
+        ["ib_async library", "IBC controller"]))
 
     # QuestDB Server
     lines.extend(box(300, 780, 230, 85, "cat-sto",

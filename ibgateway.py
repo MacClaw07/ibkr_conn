@@ -24,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from ib_insync import IB
+from ib_async import IB
 from questdb import QuestDBManager
 from logger import get_logger
 

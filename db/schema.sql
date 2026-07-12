@@ -24,9 +24,10 @@ CREATE TABLE IF NOT EXISTS futures_hist (
     high      DOUBLE,           -- high price
     low       DOUBLE,           -- low price
     close     DOUBLE,           -- close price
-    volume    LONG,             -- tick volume
-    bar_count INT,              -- number of individual trades in the bar
-    average   DOUBLE            -- volume-weighted average price (VWAP)
+    volume        LONG,             -- tick volume
+    bar_count     INT,              -- number of individual trades in the bar
+    average       DOUBLE,           -- volume-weighted average price (VWAP)
+    insertion_ts  TIMESTAMP         -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;
 -- Partition by day enables efficient time-range pruning for backtests and
 -- replay of specific date ranges.
@@ -44,8 +45,9 @@ CREATE TABLE IF NOT EXISTS futures_tick (
     ask       DOUBLE,           -- best ask price
     last      DOUBLE,           -- last traded price
     bid_size  LONG,             -- bid size (contracts)
-    ask_size  LONG,             -- ask size (contracts)
-    last_size LONG              -- last trade size (contracts)
+    ask_size      LONG,             -- ask size (contracts)
+    last_size     LONG,             -- last trade size (contracts)
+    insertion_ts  TIMESTAMP         -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;
 
 -- ----------------------------------------------------------------------------
@@ -65,13 +67,14 @@ CREATE TABLE IF NOT EXISTS options_tick (
     last           DOUBLE,      -- last traded price
     bid_size       LONG,        -- bid size (contracts)
     ask_size       LONG,        -- ask size (contracts)
-    last_size      LONG         -- last trade size (contracts)
+    last_size      LONG,        -- last trade size (contracts)
+    insertion_ts   TIMESTAMP    -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;
 
 -- ----------------------------------------------------------------------------
 -- options_hist — Historical OHLCV bars for options on futures (FOP)
 -- ----------------------------------------------------------------------------
--- Designed for ib_insync BarData from options contracts.
+-- Designed for ib_async BarData from options contracts.
 -- Combines OHLCV bar columns (as in futures_hist) with option metadata
 -- fields (underlying_ric, type, strike) from options_tick.
 CREATE TABLE IF NOT EXISTS options_hist (
@@ -87,5 +90,6 @@ CREATE TABLE IF NOT EXISTS options_hist (
     close          DOUBLE,      -- close price
     volume         LONG,        -- tick volume
     bar_count      INT,         -- number of individual trades in the bar
-    average        DOUBLE       -- volume-weighted average price (VWAP)
+    average        DOUBLE,      -- volume-weighted average price (VWAP)
+    insertion_ts   TIMESTAMP    -- local time of data insertion
 ) TIMESTAMP(datetime) PARTITION BY DAY;

@@ -13,7 +13,7 @@ from typing import NamedTuple, Optional
 # /**
 #  * A single historical bar row for QuestDB ILP write.
 #  *
-#  * Fields correspond to ib_insync.BarData and the futures_hist
+#  * Fields correspond to ib_async.BarData and the futures_hist
 #  * QuestDB table schema.
 #  */
 class HistBarData(NamedTuple):
@@ -30,13 +30,13 @@ class HistBarData(NamedTuple):
 # /**
 #  * A single tick snapshot for QuestDB ILP write.
 #  *
-#  * Fields correspond to ib_insync ticker fields and the futures_tick
+#  * Fields correspond to ib_async ticker fields and the futures_tick
 #  * QuestDB table schema.
 #  */
 # /**
 #  * A single historical bar row for an option contract — for QuestDB ILP write.
 #  *
-#  * Fields correspond to ib_insync.BarData combined with option-specific
+#  * Fields correspond to ib_async.BarData combined with option-specific
 #  * metadata (underlying_ric, type, strike) matching the options_hist table.
 #  */
 class HistBarOptionData(NamedTuple):

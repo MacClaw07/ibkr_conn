@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from ib_insync import FuturesOption, Stock
+from ib_async import FuturesOption, Stock
 
 from utils import resolve_contracts, resolve_option_underlying
 

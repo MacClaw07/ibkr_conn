@@ -29,14 +29,14 @@ package "Application Logic" #LightBlue {
 
     component "questdb.py\n--\nQuestDBManager — ILP writer\n  __init__(host, port=9000)\n  url → REST base URL\n  send_ilp_batch() → /write POST\n  write_bars() → futures_hist/options_hist\n    supports FUT + FOP sec types\n  write_ticks() → futures_tick\n  Static: is_port_open()\n  Static: is_questdb_running()\n  Static: find_questdb_pid()\n  Static: _ok(val) — NaN check\n  Static: _format_ilp_timestamp(dt)\n\nModule-level:\n  start_questdb()\n  stop_questdb()" as questdb #LightBlue
 
-    component "🔐 IB() Guard Rule\n--\nOnly session_manager.py may\nconstruct ib_insync.IB()\nor call ib.connect().\n\nibgateway._probe_gateway_api()\nuses temp IB() for probing\nbut never exports or stores it." as ib_guard #LightPink
+    component "🔐 IB() Guard Rule\n--\nOnly session_manager.py may\nconstruct ib_async.IB()\nor call ib.connect().\n\nibgateway._probe_gateway_api()\nuses temp IB() for probing\nbut never exports or stores it." as ib_guard #LightPink
 }
 
 ' ══════════════════════════════════════════════════════════════════════
 ' Zone: External Dependencies
 ' ══════════════════════════════════════════════════════════════════════
 package "External Dependencies" #LightYellow {
-    component "IB Gateway (TWS)\n--\nTCP :4002\nPaper/live trading\n\nib_insync library\nIBC controller" as ib_gateway_ext #LightYellow
+    component "IB Gateway (TWS)\n--\nTCP :4002\nPaper/live trading\n\nib_async library\nIBC controller" as ib_gateway_ext #LightYellow
 
     database "QuestDB Server\n--\nHTTP :9000\n\nfutures_hist table\noptions_hist table\nfutures_tick table\noptions_tick table\nQuestDB-Runtime JVM" as questdb_ext #LightGreen
 }
